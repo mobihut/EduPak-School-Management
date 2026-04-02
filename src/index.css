@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+
+@theme {
+  --font-sans: "Inter", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  
+  --color-neon-blue: #00f3ff;
+  --color-neon-purple: #bc13fe;
+  --color-neon-indigo: #6366f1;
+  --color-cyber-black: #050505;
+  --color-cyber-gray: #1a1a1a;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: -0.01em;
+    line-height: 1.5;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+}
+
+@layer utilities {
+  .neon-border-blue {
+    box-shadow: 0 0 5px var(--color-neon-blue), 0 0 10px var(--color-neon-blue);
+    border: 1px solid var(--color-neon-blue);
+  }
+  
+  .neon-border-purple {
+    box-shadow: 0 0 5px var(--color-neon-purple), 0 0 10px var(--color-neon-purple);
+    border: 1px solid var(--color-neon-purple);
+  }
+
+  .neon-border-indigo {
+    box-shadow: 0 0 5px var(--color-neon-indigo), 0 0 10px var(--color-neon-indigo);
+    border: 1px solid var(--color-neon-indigo);
+  }
+
+  .neon-text-blue {
+    text-shadow: 0 0 5px var(--color-neon-blue), 0 0 10px var(--color-neon-blue);
+  }
+
+  .neon-text-purple {
+    text-shadow: 0 0 5px var(--color-neon-purple), 0 0 10px var(--color-neon-purple);
+  }
+
+  .neon-text-indigo {
+    text-shadow: 0 0 5px var(--color-neon-indigo), 0 0 10px var(--color-neon-indigo);
+  }
+
+  .neon-glow-hover:hover {
+    box-shadow: 0 0 15px var(--color-neon-blue), 0 0 30px var(--color-neon-blue);
+    transform: translateY(-2px);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+body {
+  background-color: var(--color-cyber-black);
+  color: #ffffff;
+  font-family: var(--font-sans);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}

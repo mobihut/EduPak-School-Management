@@ -1,0 +1,606 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "A school entity in the multi-tenant system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique school ID (e.g., EP-SCH-1001)." },
+        "name": { "type": "string", "description": "The name of the school." },
+        "principalName": { "type": "string", "description": "The name of the principal or owner." },
+        "address": { "type": "string", "description": "The physical address of the school." },
+        "adminUid": { "type": "string", "description": "The UID of the school admin." },
+        "adminEmail": { "type": "string", "format": "email", "description": "Primary contact email for the school." },
+        "contact": { "type": "string", "description": "Contact phone number for the school." },
+        "logoUrl": { "type": "string", "description": "URL of the school logo." },
+        "country": { "type": "string", "description": "Country of the school." },
+        "timezone": { "type": "string", "description": "Timezone of the school." },
+        "status": { "type": "string", "enum": ["trial", "active", "expired", "suspended"], "description": "Current status of the school." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the school was onboarded." },
+        "trialStartDate": { "type": "string", "format": "date-time", "description": "When the trial started." },
+        "licenseExpiryDate": { "type": "string", "format": "date-time", "description": "When the license expires." }
+      },
+      "required": ["id", "name", "adminUid", "adminEmail", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user of the system (Super Admin, School Admin, Teacher, Student, Parent).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase UID." },
+        "email": { "type": "string", "format": "email", "description": "The user's email." },
+        "name": { "type": "string", "description": "The user's full name." },
+        "phone": { "type": "string", "description": "The user's phone number." },
+        "role": { "type": "string", "enum": ["super_admin", "school_admin", "teacher", "student", "parent"], "description": "The user's role." },
+        "schoolId": { "type": "string", "description": "The ID of the school the user belongs to (null for super_admin)." },
+        "studentId": { "type": "string", "description": "The ID of the student (for parents)." },
+        "status": { "type": "string", "enum": ["active", "inactive", "suspended", "banned"], "description": "User status." },
+        "isForcedResetRequired": { "type": "boolean", "description": "Whether the user must reset their credentials." },
+        "secret_pin": { "type": "string", "description": "Secret PIN for Super Admin." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the user was created." }
+      },
+      "required": ["uid", "email", "role", "status"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "A student profile within a school.",
+      "type": "object",
+      "properties": {
+        "student_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "student_uid": { "type": "string", "description": "The Firebase Auth UID of the student." },
+        "personal_info": {
+          "type": "object",
+          "properties": {
+            "firstName": { "type": "string" },
+            "lastName": { "type": "string" },
+            "dob": { "type": "string", "format": "date" },
+            "gender": { "type": "string", "enum": ["male", "female", "other"] },
+            "bloodGroup": { "type": "string" },
+            "photoUrl": { "type": "string" }
+          }
+        },
+        "academic_info": {
+          "type": "object",
+          "properties": {
+            "grade": { "type": "string" },
+            "section": { "type": "string" },
+            "rollNumber": { "type": "string" },
+            "previousSchool": { "type": "string" }
+          }
+        },
+        "attendance_stats": {
+          "type": "object",
+          "properties": {
+            "percentage": { "type": "number" },
+            "status": { "type": "string", "enum": ["gold", "silver", "bronze"] }
+          }
+        },
+        "gpa": { "type": "number" },
+        "guardian_info": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "phone": { "type": "string" },
+            "email": { "type": "string", "format": "email" },
+            "cnic": { "type": "string" },
+            "address": { "type": "string" }
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "inactive", "suspended"] },
+        "admission_date": { "type": "string", "format": "date" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["student_id", "school_id", "personal_info", "academic_info", "guardian_info", "status"]
+    },
+    "Teacher": {
+      "title": "Teacher",
+      "description": "A teacher profile within a school.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The user UID." },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string" },
+        "designation": { "type": "string" },
+        "joiningDate": { "type": "string", "format": "date" },
+        "baseSalary": { "type": "number" },
+        "allowances": { "type": "number" },
+        "deductions": { "type": "number" },
+        "subjects": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["active", "on_leave", "resigned"] }
+      },
+      "required": ["uid", "name", "email", "baseSalary"]
+    },
+    "Payroll": {
+      "title": "Payroll",
+      "description": "A payroll record for a teacher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherUid": { "type": "string" },
+        "teacherName": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "month": { "type": "string", "description": "YYYY-MM format" },
+        "baseSalary": { "type": "number" },
+        "allowances": { "type": "number" },
+        "deductions": { "type": "number" },
+        "netSalary": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "paid"] },
+        "paidAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["teacherUid", "schoolId", "month", "netSalary", "status"]
+    },
+    "GlobalSettings": {
+      "title": "Global Settings",
+      "description": "Global configuration for the application.",
+      "type": "object",
+      "properties": {
+        "footerText": { "type": "string", "description": "The global footer text (e.g., Develop by MoBiHuT)." },
+        "footerPhone": { "type": "string", "description": "The global footer phone number." },
+        "isMaintenanceMode": { "type": "boolean", "description": "Whether the application is in maintenance mode." },
+        "backupSettings": {
+          "type": "object",
+          "properties": {
+            "automatedBackups": { "type": "boolean" },
+            "retentionDays": { "type": "number" },
+            "storageRegion": { "type": "string" }
+          }
+        }
+      }
+    },
+    "BackupHistory": {
+      "title": "Backup History",
+      "description": "A log of all database backups.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "size": { "type": "number", "description": "Size in bytes" },
+        "type": { "type": "string", "enum": ["manual", "automated"] },
+        "status": { "type": "string", "enum": ["completed", "failed", "in_progress"] },
+        "fileUrl": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "size", "type", "status"]
+    },
+    "SubscriptionPlan": {
+      "title": "Subscription Plan",
+      "description": "A subscription tier for schools.",
+      "type": "object",
+      "properties": {
+        "planId": { "type": "string" },
+        "name": { "type": "string" },
+        "monthlyPrice": { "type": "number" },
+        "yearlyPrice": { "type": "number" },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["planId", "name", "monthlyPrice", "yearlyPrice", "isActive"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A billing transaction record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "schoolId": { "type": "string" },
+        "schoolName": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "status": { "type": "string", "enum": ["paid", "pending", "failed"] },
+        "invoiceUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "schoolId", "amount", "status", "createdAt"]
+    },
+    "Subscription": {
+      "title": "Subscription",
+      "description": "A school's active subscription details.",
+      "type": "object",
+      "properties": {
+        "schoolId": { "type": "string" },
+        "planId": { "type": "string" },
+        "stripeCustomerId": { "type": "string" },
+        "stripeSubscriptionId": { "type": "string" },
+        "status": { "type": "string", "enum": ["trialing", "active", "past_due", "canceled", "unpaid"] },
+        "currentPeriodStart": { "type": "string", "format": "date-time" },
+        "currentPeriodEnd": { "type": "string", "format": "date-time" },
+        "cancelAtPeriodEnd": { "type": "boolean" }
+      },
+      "required": ["schoolId", "planId", "status"]
+    },
+    "LicenseKey": {
+      "title": "License Key",
+      "description": "A manually generated license key for offline sales.",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "duration_days": { "type": "number" },
+        "status": { "type": "string", "enum": ["unused", "active", "expired", "revoked"] },
+        "school_id": { "type": "string" },
+        "activated_at": { "type": "string", "format": "date-time" },
+        "created_by": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["key", "plan_id", "duration_days", "status", "created_by"]
+    },
+    "AdminRole": {
+      "title": "Admin Role",
+      "description": "A custom role for super admins with granular permissions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "role_name": { "type": "string" },
+        "permissions": {
+          "type": "object",
+          "description": "Map of module IDs to an array of allowed actions (view, create, edit, delete)."
+        }
+      },
+      "required": ["id", "role_name", "permissions"]
+    },
+    "SupportTicket": {
+      "title": "Support Ticket",
+      "description": "A support ticket created by a school admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "school_name": { "type": "string" },
+        "subject": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "pending", "resolved"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "assigned_to": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "school_id", "subject", "status", "priority"]
+    },
+    "TicketMessage": {
+      "title": "Ticket Message",
+      "description": "A message within a support ticket conversation.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sender_id": { "type": "string" },
+        "sender_name": { "type": "string" },
+        "sender_role": { "type": "string", "enum": ["school_admin", "super_admin"] },
+        "text": { "type": "string" },
+        "attachment_url": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sender_id", "sender_role", "text", "timestamp"]
+    },
+    "GlobalConfig": {
+      "title": "Global Configuration",
+      "description": "Global application state and settings.",
+      "type": "object",
+      "properties": {
+        "platformName": { "type": "string" },
+        "supportEmail": { "type": "string", "format": "email" },
+        "supportPhone": { "type": "string" },
+        "currency": { "type": "string", "enum": ["PKR", "USD", "GBP"] },
+        "timezone": { "type": "string" },
+        "branding": {
+          "type": "object",
+          "properties": {
+            "logoUrl": { "type": "string" },
+            "faviconUrl": { "type": "string" },
+            "primaryColor": { "type": "string" }
+          }
+        },
+        "apis": {
+          "type": "object",
+          "properties": {
+            "stripePublic": { "type": "string" },
+            "stripeSecret": { "type": "string" },
+            "smtpHost": { "type": "string" },
+            "smtpKey": { "type": "string" },
+            "smsApiUrl": { "type": "string" },
+            "smsApiKey": { "type": "string" }
+          }
+        },
+        "legal": {
+          "type": "object",
+          "properties": {
+            "termsAndConditions": { "type": "string" },
+            "privacyPolicy": { "type": "string" }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["platformName", "currency", "updatedAt", "updatedBy"]
+    },
+    "GlobalAnnouncement": {
+      "title": "Global Announcement",
+      "description": "A broadcast message sent to schools.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "update", "warning"] },
+        "target_audience": { "type": "string", "description": "'all' or a specific school ID." },
+        "created_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "message", "type", "target_audience", "created_at", "expires_at"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "An immutable record of a system action for compliance and security.",
+      "type": "object",
+      "properties": {
+        "log_id": { "type": "string" },
+        "actor_uid": { "type": "string" },
+        "actor_email": { "type": "string" },
+        "action_type": { "type": "string", "enum": ["CREATE", "UPDATE", "DELETE", "LOGIN", "SYSTEM", "REVOKE"] },
+        "resource": { "type": "string", "description": "The module or resource affected (e.g., 'Schools', 'Users')." },
+        "details": { "type": "string", "description": "JSON string or text describing the change." },
+        "ip_address": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["log_id", "actor_uid", "actor_email", "action_type", "resource", "timestamp"]
+    },
+    "FeeInvoice": {
+      "title": "Fee Invoice",
+      "description": "A monthly fee invoice for a student.",
+      "type": "object",
+      "properties": {
+        "invoice_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "student_id": { "type": "string" },
+        "month": { "type": "string", "description": "Month name or YYYY-MM" },
+        "total_amount": { "type": "number" },
+        "paid_amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["unpaid", "partial", "paid"] },
+        "due_date": { "type": "string", "format": "date" },
+        "fine_applied": { "type": "number" },
+        "discount_applied": { "type": "number" }
+      },
+      "required": ["invoice_id", "school_id", "student_id", "month", "total_amount", "paid_amount", "status", "due_date"]
+    },
+    "FeePayment": {
+      "title": "Fee Payment",
+      "description": "A ledger entry for a fee payment.",
+      "type": "object",
+      "properties": {
+        "payment_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "invoice_id": { "type": "string" },
+        "student_id": { "type": "string" },
+        "amount_paid": { "type": "number" },
+        "payment_method": { "type": "string", "enum": ["cash", "bank_transfer", "online"] },
+        "collected_by": { "type": "string", "description": "Email of the collector" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["payment_id", "school_id", "invoice_id", "student_id", "amount_paid", "payment_method", "collected_by", "timestamp"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "A staff member (teaching or non-teaching) within a school.",
+      "type": "object",
+      "properties": {
+        "staff_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "name": { "type": "string" },
+        "designation": { "type": "string" },
+        "department": { "type": "string" },
+        "contact_info": {
+          "type": "object",
+          "properties": {
+            "phone": { "type": "string" },
+            "email": { "type": "string", "format": "email" },
+            "address": { "type": "string" }
+          }
+        },
+        "payroll": {
+          "type": "object",
+          "properties": {
+            "base_salary": { "type": "number" },
+            "allowances": { "type": "number" },
+            "deductions": { "type": "number" },
+            "bank_account": { "type": "string" },
+            "leave_balances": {
+              "type": "object",
+              "properties": {
+                "casual_leaves": { "type": "number" },
+                "medical_leaves": { "type": "number" },
+                "half_day_leaves": { "type": "number" }
+              }
+            }
+          }
+        },
+        "academic_info": {
+          "type": "object",
+          "properties": {
+            "qualifications": { "type": "string" },
+            "experience": { "type": "string" },
+            "joining_date": { "type": "string", "format": "date" }
+          }
+        },
+        "assigned_classes": { "type": "array", "items": { "type": "string" } },
+        "is_active": { "type": "boolean" },
+        "user_uid": { "type": "string", "description": "Linked Firebase Auth UID if they have app access." },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["staff_id", "school_id", "name", "designation", "department", "is_active"]
+    },
+    "AttendanceRecord": {
+      "title": "Attendance Record",
+      "description": "Daily attendance record for a specific class and section.",
+      "type": "object",
+      "properties": {
+        "school_id": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "class": { "type": "string" },
+        "section": { "type": "string" },
+        "marked_by_uid": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "student_id": { "type": "string" },
+              "status": { "type": "string", "enum": ["P", "A", "L"] },
+              "remarks": { "type": "string" },
+              "student_name": { "type": "string" },
+              "roll_number": { "type": "string" },
+              "photo_url": { "type": "string" }
+            },
+            "required": ["student_id", "status", "student_name"]
+          }
+        }
+      },
+      "required": ["school_id", "date", "class", "section", "marked_by_uid", "created_at", "records"]
+    },
+    "Exam": {
+      "title": "Exam",
+      "description": "Examination definitions",
+      "type": "object",
+      "properties": {
+        "exam_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "name": { "type": "string" },
+        "term": { "type": "string" },
+        "session": { "type": "string" },
+        "subjects": { "type": "object", "description": "Map of subject names to total marks" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["exam_id", "school_id", "name", "term", "session"]
+    },
+    "ExamMark": {
+      "title": "ExamMark",
+      "description": "Student marks for a specific exam and subject",
+      "type": "object",
+      "properties": {
+        "mark_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "exam_id": { "type": "string" },
+        "student_id": { "type": "string" },
+        "class": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "marks_obtained": { "type": "number" },
+        "total_marks": { "type": "number" },
+        "updated_by": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mark_id", "school_id", "exam_id", "student_id", "class", "section", "subject", "marks_obtained", "total_marks"]
+    },
+    "Timetable": {
+      "title": "Timetable",
+      "description": "Stores the weekly academic schedule for a specific class section.",
+      "type": "object",
+      "properties": {
+        "timetable_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "class": { "type": "string" },
+        "section": { "type": "string" },
+        "term": { "type": "string" },
+        "schedule": {
+          "type": "object",
+          "description": "Map of days to period assignments"
+        },
+        "updated_by": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["timetable_id", "school_id", "class", "section", "term", "schedule"]
+    },
+    "LeaveRequest": {
+      "title": "Leave Request",
+      "description": "A request for leave submitted by a teacher",
+      "type": "object",
+      "properties": {
+        "request_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "teacher_uid": { "type": "string" },
+        "teacher_name": { "type": "string" },
+        "leave_type": { "type": "string", "enum": ["Casual", "Medical", "Half-Day", "Unpaid"] },
+        "start_date": { "type": "string", "format": "date" },
+        "end_date": { "type": "string", "format": "date" },
+        "total_days": { "type": "number" },
+        "reason": { "type": "string" },
+        "attachment_url": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "applied_at": { "type": "string", "format": "date-time" },
+        "reviewed_by": { "type": "string" },
+        "review_remarks": { "type": "string" },
+        "reviewed_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["school_id", "teacher_uid", "leave_type", "start_date", "end_date", "total_days", "reason", "status"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "A task assigned to a class/section by a teacher.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "class": { "type": "string" },
+        "section": { "type": "string" },
+        "subject": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "due_date": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "created_by": { "type": "string" },
+        "attachment_url": { "type": "string" }
+      },
+      "required": ["id", "school_id", "class", "section", "subject", "title", "due_date"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "A student's submission for an assignment.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assignment_id": { "type": "string" },
+        "student_id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "submission_url": { "type": "string" },
+        "submitted_at": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["submitted", "graded", "late"] },
+        "grade": { "type": "string" },
+        "feedback": { "type": "string" }
+      },
+      "required": ["id", "assignment_id", "student_id", "school_id", "submission_url", "submitted_at", "status"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": { "schema": "School", "description": "Collection of schools." },
+    "/users/{userId}": { "schema": "User", "description": "Collection of users." },
+    "/students/{studentId}": { "schema": "Student", "description": "Collection of all students across schools." },
+    "/schools/{schoolId}/teachers/{teacherId}": { "schema": "Teacher", "description": "Teachers within a school." },
+    "/schools/{schoolId}/payroll/{payrollId}": { "schema": "Payroll", "description": "Payroll records for a school." },
+    "/settings/global": { "schema": "GlobalSettings", "description": "Global application settings." },
+    "/settings/global_config": { "schema": "GlobalConfig", "description": "Global application state and secrets." },
+    "/subscription_plans/{planId}": { "schema": "SubscriptionPlan", "description": "Available subscription plans." },
+    "/transactions/{transactionId}": { "schema": "Transaction", "description": "Global billing transactions." },
+    "/subscriptions/{subscriptionId}": { "schema": "Subscription", "description": "School subscriptions." },
+    "/license_keys/{keyId}": { "schema": "LicenseKey", "description": "Collection of license keys." },
+    "/admin_roles/{roleId}": { "schema": "AdminRole", "description": "Custom roles for super admins." },
+    "/support_tickets/{ticketId}": { "schema": "SupportTicket", "description": "Support tickets." },
+    "/support_tickets/{ticketId}/messages/{messageId}": { "schema": "TicketMessage", "description": "Messages within a ticket." },
+    "/global_announcements/{announcementId}": { "schema": "GlobalAnnouncement", "description": "Global broadcast messages." },
+    "/audit_logs/{logId}": { "schema": "AuditLog", "description": "Immutable system activity logs." },
+    "/fee_invoices/{invoiceId}": { "schema": "FeeInvoice", "description": "Global collection of fee invoices." },
+    "/fee_payments/{paymentId}": { "schema": "FeePayment", "description": "Global collection of fee payments." },
+    "/attendance_records/{recordId}": { "schema": "AttendanceRecord", "description": "Daily attendance records for classes." },
+    "/staff/{staffId}": { "schema": "Staff", "description": "Collection of all staff members across schools." },
+    "/exams/{examId}": { "schema": "Exam", "description": "Exam definitions." },
+    "/exam_marks/{markId}": { "schema": "ExamMark", "description": "Student exam marks." },
+    "/timetables/{timetableId}": { "schema": "Timetable", "description": "Weekly academic schedules for class sections." },
+    "/leave_requests/{requestId}": { "schema": "LeaveRequest", "description": "Leave requests submitted by teachers." },
+    "/assignments/{assignmentId}": { "schema": "Assignment", "description": "Assignments created by teachers." },
+    "/submissions/{submissionId}": { "schema": "Submission", "description": "Student assignment submissions." }
+  }
+}

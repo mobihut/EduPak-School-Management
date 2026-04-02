@@ -1,0 +1,23 @@
+{
+  "name": "EduPak SaaS Platform",
+  "short_name": "EduPak",
+  "description": "Enterprise-grade School Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#00f3ff",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/edupak/192/192",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://picsum.photos/seed/edupak/512/512",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
