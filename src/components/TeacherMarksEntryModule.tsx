@@ -378,7 +378,7 @@ const TeacherMarksEntryModule: React.FC<{ userProfile: any; onBack: () => void }
                     <td className="p-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <input
-                          ref={el => inputRefs.current[student.id] = el}
+                          ref={el => { if (el) inputRefs.current[student.id] = el; }}
                           type="number"
                           value={marks[student.id] ?? ''}
                           onChange={(e) => handleMarkChange(student.id, e.target.value)}

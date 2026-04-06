@@ -26,7 +26,7 @@ import {
   Legend
 } from 'recharts';
 import { db } from '../firebase';
-import { doc, getDoc, collection, query, orderBy, limit, getDocs, getCountFromServer } from 'firebase/firestore';
+import { doc, getDoc, collection, query, orderBy, limit, getDocs, getCountFromServer, where } from 'firebase/firestore';
 
 // --- Types ---
 interface GlobalStats {
@@ -59,43 +59,40 @@ const useGlobalStats = () => {
       try {
         setLoading(true);
         
-        // 1. Fetch Aggregated Global Stats (Cost Efficient: 1 Read)
-        const statsDocRef = doc(db, 'platform_stats', 'global');
-        const statsSnap = await getDoc(statsDocRef);
+        // 1. Fetch Live Counts (Cost Efficient: getCountFromServer)
+        const schoolsCountSnap = await getCountFromServer(collection(db, 'schools'));
+        const studentsCountSnap = await getCountFromServer(query(collection(db, 'users'), where('role', '==', 'student')));
+        const teachersCountSnap = await getCountFromServer(query(collection(db, 'users'), where('role', '==', 'teacher')));
+        const ticketsCountSnap = await getCountFromServer(query(collection(db, 'support_tickets'), where('status', '==', 'open')));
+        const totalUsersSnap = await getCountFromServer(collection(db, 'users'));
         
-        let dashboardStats: GlobalStats;
+        const activeTenants = schoolsCountSnap.data().count;
+        const totalStudents = studentsCountSnap.data().count;
+        const activeTeachers = teachersCountSnap.data().count;
+        const openTickets = ticketsCountSnap.data().count;
+        const totalUsers = totalUsersSnap.data().count;
+        
+        // Simple revenue calculation: $99 per school per month (or fetch from billing if available)
+        const totalMRR = activeTenants * 99;
 
-        if (statsSnap.exists()) {
-          dashboardStats = statsSnap.data() as GlobalStats;
-        } else {
-          // If aggregated doc doesn't exist, fetch real counts dynamically
-          console.log("Aggregated stats not found, fetching live counts...");
-          
-          const schoolsCountSnap = await getCountFromServer(collection(db, 'schools'));
-          const usersCountSnap = await getCountFromServer(collection(db, 'users'));
-          
-          const activeTenants = schoolsCountSnap.data().count;
-          const totalUsers = usersCountSnap.data().count;
-          
-          // Simple revenue calculation: $99 per school per month
-          const totalMRR = activeTenants * 99;
-
-          dashboardStats = {
-            totalMRR,
-            activeTenants,
-            totalUsers,
-            openTickets: 0, // Default to 0 if no tickets collection yet
-            revenueHistory: [
-              { month: 'Current', mrr: totalMRR }
-            ],
-            acquisitionHistory: [
-              { month: 'Current', schools: activeTenants }
-            ],
-            userDistribution: [
-              { name: 'Total Users', value: totalUsers }
-            ]
-          };
-        }
+        const dashboardStats: GlobalStats = {
+          totalMRR,
+          activeTenants,
+          totalUsers,
+          openTickets,
+          revenueHistory: [
+            { month: 'Current', mrr: totalMRR }
+          ],
+          acquisitionHistory: [
+            { month: 'Current', schools: activeTenants }
+          ],
+          userDistribution: [
+            { name: 'Students', value: totalStudents },
+            { name: 'Teachers', value: activeTeachers },
+            { name: 'Admins', value: activeTenants },
+            { name: 'Others', value: Math.max(0, totalUsers - totalStudents - activeTeachers - activeTenants) }
+          ]
+        };
 
         setStats(dashboardStats);
 
@@ -138,9 +135,10 @@ const PIE_COLORS = [COLORS.cyan, COLORS.purple, COLORS.pink, COLORS.green];
 // --- Main Component ---
 interface SuperAdminDashboardProps {
   userProfile: any;
+  setActiveTab: (tab: string) => void;
 }
 
-const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ userProfile }) => {
+const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ userProfile, setActiveTab }) => {
   // Security Context Check
   if (userProfile?.role !== 'super_admin') {
     return (
@@ -208,7 +206,15 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ userProfile }
             <h3 className="text-3xl font-bold text-white tracking-tight">
               ${stats.totalMRR.toLocaleString()}<span className="text-sm text-gray-500 font-medium tracking-normal ml-1">/mo</span>
             </h3>
-            <p className="text-green-400 text-xs font-bold mt-2 flex items-center gap-1"><TrendingUp size={12}/> +12.5% from last month</p>
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-green-400 text-xs font-bold flex items-center gap-1"><TrendingUp size={12}/> +12.5%</p>
+              <button 
+                onClick={() => setActiveTab('finance')}
+                className="text-[10px] font-black text-neon-blue uppercase tracking-widest hover:underline"
+              >
+                View Reports
+              </button>
+            </div>
           </motion.div>
 
           {/* Card 2: Active Tenants */}
@@ -287,7 +293,7 @@ const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ userProfile }
                     stroke={COLORS.green} 
                     strokeWidth={3} 
                     dot={{ fill: COLORS.gray, stroke: COLORS.green, strokeWidth: 2, r: 4 }} 
-                    activeDot={{ r: 6, fill: COLORS.green, shadow: '0 0 10px #00ff00' }} 
+                    activeDot={{ r: 6, fill: COLORS.green }} 
                   />
                 </LineChart>
               </ResponsiveContainer>

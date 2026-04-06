@@ -14,13 +14,15 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-  Maximize2
+  Maximize2,
+  Loader2
 } from 'lucide-react';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { QRCodeSVG } from 'qrcode.react';
 import { useReactToPrint } from 'react-to-print';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'sonner';
 
 interface IDCardGeneratorProps {
   schoolId: string;
@@ -56,6 +58,7 @@ interface SchoolSettings {
 const IDCardGenerator: React.FC<IDCardGeneratorProps> = ({ schoolId }) => {
   const [students, setStudents] = useState<StudentData[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isGeneratingIds, setIsGeneratingIds] = useState(false);
   const [schoolSettings, setSchoolSettings] = useState<SchoolSettings | null>(null);
   
   // Filters
@@ -137,6 +140,42 @@ const IDCardGenerator: React.FC<IDCardGeneratorProps> = ({ schoolId }) => {
     }
   };
 
+  const generateMissingIds = async () => {
+    setIsGeneratingIds(true);
+    try {
+      const q = query(collection(db, 'students'), where('school_id', '==', schoolId));
+      const querySnapshot = await getDocs(q);
+      
+      const batch = writeBatch(db);
+      let count = 0;
+      let totalStudents = querySnapshot.size;
+      const year = new Date().getFullYear();
+
+      querySnapshot.forEach((studentDoc) => {
+        const data = studentDoc.data();
+        // Generate ID if it's missing or in the old format (STU-...)
+        if (!data.student_id || data.student_id.startsWith('STU-')) {
+          count++;
+          const newId = `EP-${year}-${count.toString().padStart(4, '0')}`;
+          batch.update(studentDoc.ref, { student_id: newId });
+        }
+      });
+
+      if (count > 0) {
+        await batch.commit();
+        toast.success(`Successfully generated ${count} unique student IDs!`);
+        fetchStudents(); // Refresh the view
+      } else {
+        toast.info("All students already have unique IDs.");
+      }
+    } catch (error) {
+      console.error("Error generating IDs:", error);
+      toast.error("Failed to generate student IDs.");
+    } finally {
+      setIsGeneratingIds(false);
+    }
+  };
+
   const handleSignatureUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -206,6 +245,27 @@ const IDCardGenerator: React.FC<IDCardGeneratorProps> = ({ schoolId }) => {
             >
               {loading ? 'Fetching...' : 'Fetch Students'}
             </button>
+
+            <div className="h-px bg-white/5" />
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">System Utilities</label>
+              <button 
+                onClick={generateMissingIds}
+                disabled={isGeneratingIds}
+                className="w-full bg-neon-indigo/10 hover:bg-neon-indigo/20 text-neon-indigo py-3 rounded-xl font-black uppercase tracking-widest text-[10px] border border-neon-indigo/20 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isGeneratingIds ? (
+                  <Loader2 className="animate-spin" size={14} />
+                ) : (
+                  <QrCode size={14} />
+                )}
+                Generate Unique IDs
+              </button>
+              <p className="text-[9px] text-gray-500 uppercase tracking-tight leading-tight">
+                Assigns professional IDs (EP-YEAR-XXXX) to students missing them.
+              </p>
+            </div>
           </div>
 
           <div className="h-px bg-white/5" />

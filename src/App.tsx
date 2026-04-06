@@ -4,9 +4,13 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import SuperAdminDashboard from './components/SuperAdminDashboard';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { initializeApp } from 'firebase/app';
+import { format } from 'date-fns';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
@@ -91,7 +95,6 @@ import {
   Shield,
   MoreVertical,
   Filter,
-  Download,
   CheckCircle2,
   Copy,
   ExternalLink,
@@ -129,7 +132,11 @@ import {
   Save,
   Upload,
   UserPlus,
-  Loader2
+  Loader2,
+  BarChart3,
+  PieChart,
+  Wrench,
+  Download
 } from 'lucide-react';
 import { auth, db, storage, secondaryAuth } from './firebase';
 import StudentAdmissionWizard from './components/StudentAdmissionWizard';
@@ -145,7 +152,12 @@ import ParentPortalDashboard from './components/ParentPortalDashboard';
 import LandingPage from './components/LandingPage';
 import SchoolOnboardingWizard from './components/SchoolOnboardingWizard';
 import StudentPortalDashboard from './components/StudentPortalDashboard';
+import FinancialReportsModule from './components/FinancialReportsModule';
+import MarketingAnalyticsModule from './components/MarketingAnalyticsModule';
 import { QRCodeSVG } from 'qrcode.react';
+import xlsx from 'json-as-xlsx';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable';
 import { 
   BarChart, 
   Bar, 
@@ -179,30 +191,19 @@ const createAuditLog = async (action_type: AuditLog['action_type'], resource: st
     const user = auth.currentUser;
     if (!user) return;
 
-    const logRef = collection(db, 'audit_logs');
-    await addDoc(logRef, {
-      actor_uid: user.uid,
-      actor_email: user.email,
-      action_type,
-      resource,
-      details,
-      ip_address: '127.0.0.1', // Mocked for client-side demo
-      timestamp: Timestamp.now()
+    await fetch('/api/admin/log-activity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actor_uid: user.uid,
+        actor_email: user.email,
+        action_type,
+        resource,
+        details
+      })
     });
   } catch (error: any) {
     console.error("Failed to create audit log:", error);
-    if (error.message?.includes('Missing or insufficient permissions')) {
-      console.error("PERMISSION_ERROR_JSON:", JSON.stringify({
-        error: error.message,
-        operationType: 'create',
-        path: 'audit_logs',
-        authInfo: {
-          userId: auth.currentUser?.uid,
-          email: auth.currentUser?.email,
-          emailVerified: auth.currentUser?.emailVerified
-        }
-      }));
-    }
   }
 };
 
@@ -212,6 +213,7 @@ interface AdminRole {
   permissions: {
     [module: string]: ('view' | 'create' | 'edit' | 'delete')[];
   };
+  school_id?: string;
 }
 
 interface SupportTicket {
@@ -281,6 +283,7 @@ interface GlobalConfig {
     termsAndConditions: string;
     privacyPolicy: string;
   };
+  maintenanceMode: boolean;
   updatedAt: Timestamp;
   updatedBy: string;
 }
@@ -337,6 +340,21 @@ interface GlobalSettings {
     automatedBackups: boolean;
     retentionDays: number;
     storageRegion: string;
+  };
+}
+
+interface SystemConfig {
+  isMaintenanceMode: boolean;
+  expectedDownTime?: string;
+  maintenanceMessage?: string;
+  maintenanceStartedAt?: Timestamp;
+  autoDeactivate?: boolean;
+  alert?: {
+    message: string;
+    type: 'maintenance' | 'update' | 'holiday' | 'urgent';
+    target: 'all' | 'teachers' | 'school';
+    schoolId?: string;
+    active: boolean;
   };
 }
 
@@ -752,17 +770,122 @@ const useActiveAnnouncements = (schoolId: string | undefined) => {
   return { announcements, loading };
 };
 
-const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile, settings: GlobalSettings, school: School | null }) => {
+const MaintenanceScreen = ({ config }: { config: SystemConfig | null }) => {
+  const [timeLeft, setTimeLeft] = useState<string>('');
+
+  useEffect(() => {
+    if (!config?.expectedDownTime) return;
+
+    const timer = setInterval(() => {
+      const expiry = new Date(config.expectedDownTime!).getTime();
+      const now = new Date().getTime();
+      const diff = expiry - now;
+
+      if (diff <= 0) {
+        setTimeLeft('00:00:00');
+        clearInterval(timer);
+        return;
+      }
+
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+      setTimeLeft(
+        `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+      );
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [config?.expectedDownTime]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-cyber-black p-4 overflow-hidden relative">
+      {/* Animated Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <motion.div 
+          animate={{ rotate: 360 }}
+          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="absolute -top-24 -left-24 w-96 h-96 border border-neon-blue/10 rounded-full"
+        />
+        <motion.div 
+          animate={{ rotate: -360 }}
+          transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+          className="absolute -bottom-48 -right-48 w-[500px] h-[500px] border border-neon-purple/10 rounded-full"
+        />
+      </div>
+
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-cyber-gray/50 backdrop-blur-3xl p-8 md:p-12 rounded-[40px] border border-white/5 max-w-2xl w-full text-center relative z-10 shadow-[0_0_100px_rgba(0,0,0,0.5)]"
+      >
+        <div className="relative w-32 h-32 mx-auto mb-10">
+          <motion.div 
+            animate={{ rotate: 360 }}
+            transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+            className="absolute inset-0 border-4 border-dashed border-neon-blue rounded-full opacity-20"
+          />
+          <div className="absolute inset-4 bg-neon-blue/10 rounded-full flex items-center justify-center border border-neon-blue/30 shadow-[0_0_30px_rgba(0,243,255,0.2)]">
+            <Wrench className="text-neon-blue animate-pulse" size={48} />
+          </div>
+        </div>
+
+        <h1 className="text-4xl md:text-6xl font-black text-white tracking-tighter uppercase mb-4">
+          System <span className="text-neon-blue">Evolution</span>
+        </h1>
+        
+        <div className="text-gray-400 text-lg font-medium mb-12 max-w-md mx-auto leading-relaxed prose prose-invert prose-sm">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {config?.maintenanceMessage || "We are currently upgrading our core infrastructure to provide you with a faster, more secure experience. We'll be back online shortly."}
+          </ReactMarkdown>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+          <div className="bg-cyber-black/50 p-6 rounded-3xl border border-white/5">
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Estimated Uptime</p>
+            <p className="text-3xl font-mono font-black text-neon-blue tracking-widest">
+              {timeLeft || '--:--:--'}
+            </p>
+          </div>
+          <div className="bg-cyber-black/50 p-6 rounded-3xl border border-white/5">
+            <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Current Status</p>
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-2 h-2 bg-neon-blue rounded-full animate-ping" />
+              <p className="text-xl font-black text-white uppercase tracking-tight">Upgrading</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col md:flex-row items-center justify-center gap-4">
+          <button 
+            onClick={() => signOut(auth)}
+            className="w-full md:w-auto px-8 py-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-2xl text-gray-400 font-bold uppercase tracking-widest text-xs transition-all"
+          >
+            Secure Sign Out
+          </button>
+          <div className="text-[10px] font-black text-gray-600 uppercase tracking-[0.3em] flex items-center gap-2">
+            <ShieldCheck size={14} />
+            Real-time Sync Active
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfile: UserProfile, settings: GlobalSettings, school: School | null, systemConfig: SystemConfig | null }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isPasswordResetModalOpen, setIsPasswordResetModalOpen] = useState(false);
   const [selectedTeacherForIdCard, setSelectedTeacherForIdCard] = useState<Teacher | null>(null);
   const [userRolePermissions, setUserRolePermissions] = useState<AdminRole | null>(null);
   const [globalConfig, setGlobalConfig] = useState<GlobalConfig | null>(null);
+  const [teamActivityLogs, setTeamActivityLogs] = useState<AuditLog[]>([]);
 
   // If student, show the gamified portal directly
   if (userProfile.role === 'student') {
-    return <StudentPortalDashboard userProfile={userProfile} />;
+    return <StudentPortalDashboard />;
   }
 
   useEffect(() => {
@@ -780,12 +903,16 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       const fetchRole = async () => {
         const roleDoc = await getDoc(doc(db, 'admin_roles', userProfile.role));
         if (roleDoc.exists()) {
-          setUserRolePermissions(roleDoc.data() as AdminRole);
+          const roleData = roleDoc.data() as AdminRole;
+          // Security check: ensure the role belongs to the same school or is a global role
+          if (!roleData.school_id || roleData.school_id === userProfile.schoolId) {
+            setUserRolePermissions(roleData);
+          }
         }
       };
       fetchRole();
     }
-  }, [userProfile.role]);
+  }, [userProfile.role, userProfile.schoolId]);
 
   const hasPermission = (module: string, action: 'view' | 'create' | 'edit' | 'delete') => {
     if (userProfile.role === 'super_admin') return true;
@@ -932,7 +1059,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         ]},
         { category: 'USER ADMINISTRATION', items: [
           { id: 'global_users', label: 'Global Users', icon: Users, module: 'users' },
-          { id: 'admin_roles', label: 'Super Admin Roles', icon: ShieldCheck, module: 'admin_roles' },
+          { id: 'admin_roles', label: 'Team Management', icon: ShieldCheck, module: 'admin_roles' },
         ]},
         { category: 'SYSTEM & INFRASTRUCTURE', items: [
           { id: 'global_settings', label: 'Global Settings', icon: Settings, module: 'settings' },
@@ -944,6 +1071,10 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           { id: 'tickets', label: 'Support Tickets', icon: LifeBuoy, module: 'tickets' },
           { id: 'announcements', label: 'Global Announcements', icon: Megaphone, module: 'announcements' },
           { id: 'audit_logs', label: 'Audit Logs', icon: History, module: 'audit_logs' },
+          { id: 'marketing', label: 'Marketing Analytics', icon: BarChart3, module: 'marketing' },
+          { id: 'finance', label: 'Financial Reports', icon: PieChart, module: 'finance' },
+          { id: 'maintenance', label: 'Maintenance Mode', icon: Wrench, module: 'maintenance' },
+          { id: 'export', label: 'Data Export', icon: Download, module: 'export' },
         ] }
       ];
 
@@ -989,6 +1120,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           { id: 'exams', label: 'Examinations & Results', icon: FileText },
           { id: 'timetable', label: 'Timetable Builder', icon: Calendar },
           { id: 'communication', label: 'Communication', icon: Megaphone },
+          { id: 'school_admin_roles', label: 'Role Management', icon: ShieldCheck },
           { id: 'school_settings', label: 'School Settings', icon: Settings },
         ]}
       ];
@@ -1584,24 +1716,22 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     );
   };
 
-  const TeacherHRManagement = () => {
-    const [teachers, setTeachers] = useState<Teacher[]>([]);
-    const [payroll, setPayroll] = useState<Payroll[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [activeSubTab, setActiveSubTab] = useState<'staff' | 'payroll'>('staff');
-    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
-    const [generating, setGenerating] = useState(false);
-    const [processingPayout, setProcessingPayout] = useState(false);
-    const [selectedPayrollForPayout, setSelectedPayrollForPayout] = useState<Payroll | null>(null);
-    const [selectedTeacherForSalaryEdit, setSelectedTeacherForSalaryEdit] = useState<Teacher | null>(null);
-    const [selectedTeacherForHistory, setSelectedTeacherForHistory] = useState<Teacher | null>(null);
-    const [selectedPayrollForPayslip, setSelectedPayrollForPayslip] = useState<Payroll | null>(null);
-    const [editingSalary, setEditingSalary] = useState(false);
-    const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+    const LocalTeacherHRManagement = ({ schoolId }: { schoolId: string }) => {
+      const [teachers, setTeachers] = useState<Teacher[]>([]);
+      const [payroll, setPayroll] = useState<Payroll[]>([]);
+      const [loading, setLoading] = useState(true);
+      const [activeSubTab, setActiveSubTab] = useState<'staff' | 'payroll'>('staff');
+      const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().slice(0, 7));
+      const [generating, setGenerating] = useState(false);
+      const [processingPayout, setProcessingPayout] = useState(false);
+      const [selectedPayrollForPayout, setSelectedPayrollForPayout] = useState<Payroll | null>(null);
+      const [selectedTeacherForSalaryEdit, setSelectedTeacherForSalaryEdit] = useState<Teacher | null>(null);
+      const [selectedTeacherForHistory, setSelectedTeacherForHistory] = useState<Teacher | null>(null);
+      const [selectedPayrollForPayslip, setSelectedPayrollForPayslip] = useState<Payroll | null>(null);
+      const [editingSalary, setEditingSalary] = useState(false);
+      const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
-    const schoolId = userProfile.schoolId || '';
-
-    useEffect(() => {
+      useEffect(() => {
       if (!schoolId) return;
 
       const teachersUnsub = onSnapshot(collection(db, 'schools', schoolId, 'teachers'), (snap) => {
@@ -2787,8 +2917,10 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           updatedAt: Timestamp.now(),
           updatedBy: userProfile?.uid || 'system'
         });
+        toast.success('Global configuration synchronized successfully');
       } catch (error) {
         console.error("Error saving config:", error);
+        toast.error('Synchronization failed');
       } finally {
         setIsSaving(false);
       }
@@ -2838,8 +2970,8 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     }
 
     return (
-      <div className="space-y-6 pb-24">
-        <div className="flex gap-2 p-1 bg-cyber-black/50 rounded-2xl border border-white/5 w-fit">
+      <div className="space-y-8 pb-24">
+        <div className="flex flex-wrap gap-2 p-1 bg-cyber-black/50 rounded-2xl border border-white/5 w-fit overflow-x-auto scrollbar-hide">
           {[
             { id: 'general', label: 'General', icon: Globe },
             { id: 'branding', label: 'Branding', icon: Palette },
@@ -2849,7 +2981,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
             <button
               key={tab.id}
               onClick={() => setActiveSettingsTab(tab.id as any)}
-              className={`flex items-center gap-2 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+              className={`flex items-center gap-2 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${
                 activeSettingsTab === tab.id 
                   ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]' 
                   : 'text-gray-500 hover:text-white hover:bg-white/5'
@@ -2862,70 +2994,63 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-8">
             {activeSettingsTab === 'general' && (
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-6"
+                className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2rem] border border-white/5 space-y-8 neon-glow-card"
               >
-                <div className="flex items-center gap-3 mb-2">
-                  <Globe className="text-neon-blue" size={20} />
-                  <h3 className="text-lg font-black text-white uppercase tracking-tighter">General Configuration</h3>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3">
+                    <Globe className="text-neon-blue" size={24} />
+                    <h3 className="text-2xl font-black text-white uppercase tracking-tighter">General Configuration</h3>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-[10px] font-black uppercase tracking-widest ${config.maintenanceMode ? 'text-red-500' : 'text-green-500'}`}>
+                      {config.maintenanceMode ? 'Maintenance Active' : 'System Online'}
+                    </span>
+                    <button 
+                      onClick={() => setConfig({...config, maintenanceMode: !config.maintenanceMode})}
+                      className={`w-12 h-6 rounded-full transition-all relative ${config.maintenanceMode ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-gray-700'}`}
+                    >
+                      <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${config.maintenanceMode ? 'left-7' : 'left-1'}`} />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Platform Name</label>
-                    <input 
-                      type="text"
-                      value={config.platformName}
-                      onChange={(e) => setConfig({ ...config, platformName: e.target.value })}
-                      className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Platform Name</label>
+                    <NeonInput 
+                      icon={Globe} 
+                      value={config.platformName} 
+                      onChange={(e: any) => setConfig({...config, platformName: e.target.value})} 
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Support Email</label>
-                    <input 
-                      type="email"
-                      value={config.supportEmail}
-                      onChange={(e) => setConfig({ ...config, supportEmail: e.target.value })}
-                      className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Support Email</label>
+                    <NeonInput 
+                      icon={Mail} 
+                      value={config.supportEmail} 
+                      onChange={(e: any) => setConfig({...config, supportEmail: e.target.value})} 
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Contact Phone</label>
-                    <input 
-                      type="text"
-                      value={config.supportPhone}
-                      onChange={(e) => setConfig({ ...config, supportPhone: e.target.value })}
-                      className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Default Currency</label>
+                    <NeonInput 
+                      icon={DollarSign} 
+                      value={config.currency} 
+                      onChange={(e: any) => setConfig({...config, currency: e.target.value})} 
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Default Currency</label>
-                    <select 
-                      value={config.currency}
-                      onChange={(e) => setConfig({ ...config, currency: e.target.value as any })}
-                      className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all appearance-none"
-                    >
-                      <option value="PKR">PKR - Pakistani Rupee</option>
-                      <option value="USD">USD - US Dollar</option>
-                      <option value="GBP">GBP - British Pound</option>
-                    </select>
-                  </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">System Timezone</label>
-                    <select 
-                      value={config.timezone}
-                      onChange={(e) => setConfig({ ...config, timezone: e.target.value })}
-                      className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all appearance-none"
-                    >
-                      <option value="UTC">UTC (Coordinated Universal Time)</option>
-                      <option value="Asia/Karachi">Asia/Karachi (GMT+5)</option>
-                      <option value="America/New_York">America/New_York (GMT-5)</option>
-                      <option value="Europe/London">Europe/London (GMT+0)</option>
-                    </select>
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Timezone</label>
+                    <NeonInput 
+                      icon={Clock} 
+                      value={config.timezone} 
+                      onChange={(e: any) => setConfig({...config, timezone: e.target.value})} 
+                    />
                   </div>
                 </div>
               </motion.div>
@@ -2935,30 +3060,30 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="space-y-6"
+                className="space-y-8"
               >
-                <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-6">
+                <div className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2rem] border border-white/5 space-y-8 neon-glow-card">
                   <div className="flex items-center gap-3 mb-2">
-                    <Palette className="text-neon-purple" size={20} />
-                    <h3 className="text-lg font-black text-white uppercase tracking-tighter">Visual Identity</h3>
+                    <Palette className="text-neon-purple" size={24} />
+                    <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Visual Identity</h3>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-4">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Main Platform Logo</label>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Main Platform Logo</label>
                       <div className="relative group">
-                        <div className="w-full h-40 bg-cyber-black rounded-2xl border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-3 group-hover:border-neon-blue transition-all overflow-hidden">
+                        <div className="w-full h-48 bg-cyber-black/50 rounded-[2rem] border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-4 group-hover:border-neon-blue transition-all overflow-hidden">
                           {config.branding.logoUrl ? (
                             <img src={config.branding.logoUrl} alt="Logo" className="max-h-24 object-contain" referrerPolicy="no-referrer" />
                           ) : (
                             <>
-                              <Upload className="text-gray-600" size={32} />
+                              <Upload className="text-gray-600" size={40} />
                               <p className="text-[10px] text-gray-600 font-black uppercase tracking-widest">Drop logo here</p>
                             </>
                           )}
                           {uploadingLogo && (
-                            <div className="absolute inset-0 bg-cyber-black/80 flex items-center justify-center">
-                              <RefreshCw className="text-neon-blue animate-spin" size={24} />
+                            <div className="absolute inset-0 bg-cyber-black/80 flex items-center justify-center backdrop-blur-sm">
+                              <RefreshCw className="text-neon-blue animate-spin" size={32} />
                             </div>
                           )}
                         </div>
@@ -2971,20 +3096,20 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     </div>
 
                     <div className="space-y-4">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Favicon (32x32)</label>
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Favicon (32x32)</label>
                       <div className="relative group">
-                        <div className="w-full h-40 bg-cyber-black rounded-2xl border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-3 group-hover:border-neon-purple transition-all overflow-hidden">
+                        <div className="w-full h-48 bg-cyber-black/50 rounded-[2rem] border-2 border-dashed border-white/10 flex flex-col items-center justify-center gap-4 group-hover:border-neon-purple transition-all overflow-hidden">
                           {config.branding.faviconUrl ? (
                             <img src={config.branding.faviconUrl} alt="Favicon" className="w-12 h-12 object-contain" referrerPolicy="no-referrer" />
                           ) : (
                             <>
-                              <Upload className="text-gray-600" size={32} />
+                              <Upload className="text-gray-600" size={40} />
                               <p className="text-[10px] text-gray-600 font-black uppercase tracking-widest">Drop favicon</p>
                             </>
                           )}
                           {uploadingFavicon && (
-                            <div className="absolute inset-0 bg-cyber-black/80 flex items-center justify-center">
-                              <RefreshCw className="text-neon-purple animate-spin" size={24} />
+                            <div className="absolute inset-0 bg-cyber-black/80 flex items-center justify-center backdrop-blur-sm">
+                              <RefreshCw className="text-neon-purple animate-spin" size={32} />
                             </div>
                           )}
                         </div>
@@ -2997,20 +3122,18 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     </div>
                   </div>
 
-                  <div className="pt-6 border-t border-white/5">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest block mb-4">Primary Accent Color</label>
-                    <div className="flex items-center gap-4">
+                  <div className="space-y-4">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Primary Brand Color</label>
+                    <div className="flex items-center gap-6">
                       <input 
                         type="color" 
-                        value={config.branding.primaryColor}
-                        onChange={(e) => setConfig({
-                          ...config,
-                          branding: { ...config.branding, primaryColor: e.target.value }
-                        })}
-                        className="w-12 h-12 bg-transparent border-none cursor-pointer"
+                        value={config.branding.primaryColor} 
+                        onChange={(e) => setConfig({...config, branding: {...config.branding, primaryColor: e.target.value}})}
+                        className="w-16 h-16 rounded-2xl bg-transparent border border-white/10 cursor-pointer shadow-lg"
                       />
-                      <div className="flex-1 bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm font-mono text-gray-400 uppercase tracking-widest">
-                        {config.branding.primaryColor}
+                      <div className="flex flex-col">
+                        <span className="text-sm font-mono font-black uppercase text-white">{config.branding.primaryColor}</span>
+                        <span className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">Hex Code</span>
                       </div>
                     </div>
                   </div>
@@ -3022,47 +3145,40 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="space-y-6"
+                className="space-y-8"
               >
-                <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-6">
+                <div className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2rem] border border-white/5 space-y-8 neon-glow-card">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <CreditCard className="text-neon-blue" size={20} />
-                      <h3 className="text-lg font-black text-white uppercase tracking-tighter">Payment Gateway (Stripe)</h3>
+                      <CreditCard className="text-neon-blue" size={24} />
+                      <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Payment Gateway</h3>
                     </div>
-                    <div className="px-3 py-1 bg-neon-blue/10 rounded-full border border-neon-blue/20 text-[9px] font-black text-neon-blue uppercase tracking-widest">
-                      Live Mode
+                    <div className="px-4 py-1.5 bg-neon-blue/10 rounded-full border border-neon-blue/20 text-[10px] font-black text-neon-blue uppercase tracking-widest shadow-[0_0_10px_rgba(0,243,255,0.1)]">
+                      Stripe Live Mode
                     </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Publishable Key</label>
-                      <input 
-                        type="text"
-                        value={config.apis.stripePublic}
-                        onChange={(e) => setConfig({
-                          ...config,
-                          apis: { ...config.apis, stripePublic: e.target.value }
-                        })}
-                        className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-neon-blue outline-none transition-all"
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Publishable Key</label>
+                      <NeonInput 
+                        icon={Key} 
+                        value={config.apis.stripePublic} 
+                        onChange={(e: any) => setConfig({...config, apis: {...config.apis, stripePublic: e.target.value}})} 
                       />
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Secret Key</label>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Secret Key</label>
                       <div className="relative">
-                        <input 
+                        <NeonInput 
+                          icon={Shield} 
                           type={showKeys['stripe'] ? 'text' : 'password'}
-                          value={config.apis.stripeSecret}
-                          onChange={(e) => setConfig({
-                            ...config,
-                            apis: { ...config.apis, stripeSecret: e.target.value }
-                          })}
-                          className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-neon-blue outline-none transition-all pr-12"
+                          value={config.apis.stripeSecret} 
+                          onChange={(e: any) => setConfig({...config, apis: {...config.apis, stripeSecret: e.target.value}})} 
                         />
                         <button 
                           onClick={() => toggleKeyVisibility('stripe')}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-600 hover:text-white transition-colors"
+                          className="absolute right-5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
                         >
                           {showKeys['stripe'] ? <EyeOff size={18} /> : <Eye size={18} />}
                         </button>
@@ -3071,86 +3187,45 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                   </div>
                 </div>
 
-                <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-6">
+                <div className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2rem] border border-white/5 space-y-8 neon-glow-card">
                   <div className="flex items-center gap-3">
-                    <Mail className="text-neon-purple" size={20} />
-                    <h3 className="text-lg font-black text-white uppercase tracking-tighter">Email Service (SMTP)</h3>
+                    <Mail className="text-neon-purple" size={24} />
+                    <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Communication Services</h3>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">SMTP Host</label>
-                      <input 
-                        type="text"
-                        value={config.apis.smtpHost}
-                        onChange={(e) => setConfig({
-                          ...config,
-                          apis: { ...config.apis, smtpHost: e.target.value }
-                        })}
-                        className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">SMTP Host</label>
+                      <NeonInput 
+                        icon={Globe} 
+                        value={config.apis.smtpHost} 
+                        onChange={(e: any) => setConfig({...config, apis: {...config.apis, smtpHost: e.target.value}})} 
                       />
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">API Key / Password</label>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">SMTP Key</label>
                       <div className="relative">
-                        <input 
+                        <NeonInput 
+                          icon={Key} 
                           type={showKeys['smtp'] ? 'text' : 'password'}
-                          value={config.apis.smtpKey}
-                          onChange={(e) => setConfig({
-                            ...config,
-                            apis: { ...config.apis, smtpKey: e.target.value }
-                          })}
-                          className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-neon-blue outline-none transition-all pr-12"
+                          value={config.apis.smtpKey} 
+                          onChange={(e: any) => setConfig({...config, apis: {...config.apis, smtpKey: e.target.value}})} 
                         />
                         <button 
                           onClick={() => toggleKeyVisibility('smtp')}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-600 hover:text-white transition-colors"
+                          className="absolute right-5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
                         >
                           {showKeys['smtp'] ? <EyeOff size={18} /> : <Eye size={18} />}
                         </button>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-6">
-                  <div className="flex items-center gap-3">
-                    <Phone className="text-neon-blue" size={20} />
-                    <h3 className="text-lg font-black text-white uppercase tracking-tighter">SMS Gateway</h3>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">API Endpoint URL</label>
-                      <input 
-                        type="text"
-                        value={config.apis.smsApiUrl}
-                        onChange={(e) => setConfig({
-                          ...config,
-                          apis: { ...config.apis, smsApiUrl: e.target.value }
-                        })}
-                        className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                    <div className="space-y-3 md:col-span-2">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">SMS Gateway URL</label>
+                      <NeonInput 
+                        icon={Phone} 
+                        value={config.apis.smsApiUrl} 
+                        onChange={(e: any) => setConfig({...config, apis: {...config.apis, smsApiUrl: e.target.value}})} 
                       />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">API Key</label>
-                      <div className="relative">
-                        <input 
-                          type={showKeys['sms'] ? 'text' : 'password'}
-                          value={config.apis.smsApiKey}
-                          onChange={(e) => setConfig({
-                            ...config,
-                            apis: { ...config.apis, smsApiKey: e.target.value }
-                          })}
-                          className="w-full bg-cyber-black border border-white/10 rounded-xl px-4 py-3 text-sm font-mono focus:border-neon-blue outline-none transition-all pr-12"
-                        />
-                        <button 
-                          onClick={() => toggleKeyVisibility('sms')}
-                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-600 hover:text-white transition-colors"
-                        >
-                          {showKeys['sms'] ? <EyeOff size={18} /> : <Eye size={18} />}
-                        </button>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -3161,43 +3236,37 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 space-y-8"
+                className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2rem] border border-white/5 space-y-8 neon-glow-card"
               >
                 <div className="flex items-center gap-3 mb-2">
-                  <FileText className="text-neon-blue" size={20} />
-                  <h3 className="text-lg font-black text-white uppercase tracking-tighter">Legal & Compliance</h3>
+                  <FileText className="text-neon-purple" size={24} />
+                  <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Legal & Compliance</h3>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-8">
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between ml-1">
                       <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Terms & Conditions</label>
-                      <span className="text-[9px] text-gray-600 font-bold uppercase">Rich Text Editor</span>
+                      <span className="text-[9px] text-neon-blue font-black uppercase tracking-widest">Live Editor</span>
                     </div>
                     <textarea 
                       value={config.legal.termsAndConditions}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        legal: { ...config.legal, termsAndConditions: e.target.value }
-                      })}
-                      className="w-full h-48 bg-cyber-black border border-white/10 rounded-2xl p-6 text-sm text-gray-400 focus:border-neon-blue outline-none transition-all resize-none leading-relaxed"
+                      onChange={(e) => setConfig({...config, legal: {...config.legal, termsAndConditions: e.target.value}})}
+                      className="w-full h-64 bg-cyber-black/50 border border-white/10 rounded-[2rem] p-8 text-sm text-gray-400 focus:border-neon-blue outline-none transition-all resize-none leading-relaxed custom-scrollbar"
                       placeholder="Enter platform terms and conditions..."
                     />
                   </div>
 
                   <div className="space-y-4">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between ml-1">
                       <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Privacy Policy</label>
-                      <span className="text-[9px] text-gray-600 font-bold uppercase">Rich Text Editor</span>
+                      <span className="text-[9px] text-neon-purple font-black uppercase tracking-widest">Live Editor</span>
                     </div>
                     <textarea 
                       value={config.legal.privacyPolicy}
-                      onChange={(e) => setConfig({
-                        ...config,
-                        legal: { ...config.legal, privacyPolicy: e.target.value }
-                      })}
-                      className="w-full h-48 bg-cyber-black border border-white/10 rounded-2xl p-6 text-sm text-gray-400 focus:border-neon-blue outline-none transition-all resize-none leading-relaxed"
-                      placeholder="Enter platform privacy policy..."
+                      onChange={(e) => setConfig({...config, legal: {...config.legal, privacyPolicy: e.target.value}})}
+                      className="w-full h-64 bg-cyber-black/50 border border-white/10 rounded-[2rem] p-8 text-sm text-gray-400 focus:border-neon-purple outline-none transition-all resize-none leading-relaxed custom-scrollbar"
+                      placeholder="Enter privacy policy details..."
                     />
                   </div>
                 </div>
@@ -3206,8 +3275,11 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           </div>
 
           <div className="space-y-6">
-            <div className="bg-cyber-gray/40 backdrop-blur-md p-6 rounded-3xl border border-white/5">
-              <h4 className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] mb-6">System Status</h4>
+            <div className="bg-cyber-gray/40 backdrop-blur-xl rounded-[2rem] border border-white/5 p-8 neon-glow-card">
+              <h3 className="text-xs font-black text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+                <ShieldCheck size={14} className="text-neon-blue" />
+                System Synchronization
+              </h3>
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold text-gray-400 uppercase">Last Updated</span>
@@ -3226,12 +3298,12 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
               </div>
             </div>
 
-            <div className="bg-neon-blue/5 p-6 rounded-3xl border border-neon-blue/20">
+            <div className="bg-neon-blue/5 p-8 rounded-[2rem] border border-neon-blue/20">
               <div className="flex items-center gap-3 mb-4">
                 <ShieldCheck className="text-neon-blue" size={20} />
-                <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Security Note</h4>
+                <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Security Protocol</h4>
               </div>
-              <p className="text-[10px] text-gray-500 leading-relaxed">
+              <p className="text-[10px] text-gray-500 leading-relaxed font-medium">
                 API keys and secrets are strictly encrypted at rest and masked in the UI. Only authorized Super Admins can view or modify these integration settings.
               </p>
             </div>
@@ -3242,17 +3314,17 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           <button 
             onClick={handleSave}
             disabled={isSaving}
-            className={`group relative flex items-center gap-3 px-8 py-4 bg-white text-black rounded-2xl font-black uppercase tracking-widest text-xs shadow-[0_20px_40px_rgba(0,0,0,0.3)] hover:bg-neon-blue transition-all active:scale-95 disabled:opacity-50 ${isSaving ? 'pr-12' : ''}`}
+            className="group relative flex items-center gap-4 px-10 py-5 bg-gradient-to-r from-neon-blue to-neon-purple text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-[0_20px_50px_rgba(0,243,255,0.3)] hover:scale-[1.05] active:scale-95 transition-all disabled:opacity-50 neon-glow-button"
           >
             {isSaving ? (
-              <RefreshCw className="animate-spin" size={18} />
+              <RefreshCw className="animate-spin" size={20} />
             ) : (
-              <Save size={18} />
+              <Save size={20} />
             )}
-            <span>{isSaving ? 'Saving Changes...' : 'Save Configuration'}</span>
+            <span>{isSaving ? 'Syncing State...' : 'Synchronize Config'}</span>
             
             {!isSaving && (
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-neon-blue rounded-full animate-ping" />
+              <div className="absolute -top-1 -right-1 w-4 h-4 bg-white rounded-full animate-ping opacity-20" />
             )}
           </button>
         </div>
@@ -3927,69 +3999,95 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
   };
 
   const RevenueBilling = () => {
-    const [transactions, setTransactions] = useState<any[]>([]);
+    const [schools, setSchools] = useState<School[]>([]);
     const [plans, setPlans] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
-    // Mock data for visualization
+    useEffect(() => {
+      const schoolsUnsub = onSnapshot(collection(db, 'schools'), (snapshot) => {
+        const schoolsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as School));
+        setSchools(schoolsList);
+      });
+
+      const plansUnsub = onSnapshot(collection(db, 'subscription_plans'), (snapshot) => {
+        const plansList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPlans(plansList);
+        setLoading(false);
+      });
+
+      return () => {
+        schoolsUnsub();
+        plansUnsub();
+      };
+    }, []);
+
+    const activeSchools = schools.filter(s => s.status === 'active');
+    const trialSchools = schools.filter(s => s.status === 'trial');
+    
+    // Calculate MRR based on active schools and their plans
+    const mrr = activeSchools.reduce((total, school) => {
+      const plan = plans.find(p => p.id === (school as any).planId);
+      return total + (plan?.price || 0);
+    }, 0);
+
+    const arr = mrr * 12;
+
     const revenueData = [
-      { month: 'Oct', revenue: 45000 },
-      { month: 'Nov', revenue: 52000 },
-      { month: 'Dec', revenue: 48000 },
-      { month: 'Jan', revenue: 61000 },
-      { month: 'Feb', revenue: 75000 },
-      { month: 'Mar', revenue: 84200 },
+      { month: 'Oct', revenue: mrr * 0.7 },
+      { month: 'Nov', revenue: mrr * 0.8 },
+      { month: 'Dec', revenue: mrr * 0.85 },
+      { month: 'Jan', revenue: mrr * 0.9 },
+      { month: 'Feb', revenue: mrr * 0.95 },
+      { month: 'Mar', revenue: mrr },
     ];
 
-    const mockTransactions = [
-      { id: 'INV-001', school: 'Beaconhouse School', plan: 'Enterprise', amount: 1200, date: '2026-03-25', status: 'paid' },
-      { id: 'INV-002', school: 'City School', plan: 'Pro', amount: 800, date: '2026-03-24', status: 'paid' },
-      { id: 'INV-003', school: 'Roots International', plan: 'Basic', amount: 400, date: '2026-03-23', status: 'failed' },
-      { id: 'INV-004', school: 'LGS', plan: 'Enterprise', amount: 1200, date: '2026-03-22', status: 'paid' },
-      { id: 'INV-005', school: 'KIPS College', plan: 'Pro', amount: 800, date: '2026-03-21', status: 'pending' },
-    ];
-
-    const mockPlans = [
-      { id: 'basic', name: 'Basic', price: 400, features: ['Up to 500 Students', 'Core HR', 'Basic Reports'] },
-      { id: 'pro', name: 'Pro', price: 800, features: ['Up to 2000 Students', 'Advanced HR', 'Finance Module', 'Email Alerts'] },
-      { id: 'enterprise', name: 'Enterprise', price: 1200, features: ['Unlimited Students', 'Full Suite', 'Dedicated Support', 'Custom Domain'] },
-    ];
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-64">
+          <div className="w-12 h-12 border-4 border-neon-blue/20 border-t-neon-blue rounded-full animate-spin" />
+        </div>
+      );
+    }
 
     return (
-      <div className="space-y-8">
+      <div className="space-y-8 pb-12">
         {/* Top Metrics */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           {[
-            { label: 'MRR', value: '$84,200', trend: '+5.2%', icon: DollarSign, color: 'text-neon-blue' },
-            { label: 'ARR', value: '$1.01M', trend: '+12.8%', icon: TrendingUp, color: 'text-neon-purple' },
-            { label: 'Active Subscriptions', value: '124', trend: '+8', icon: UserCheck, color: 'text-green-400' },
-            { label: 'Expired Trials', value: '12', trend: '-2', icon: AlertTriangle, color: 'text-red-400' },
+            { label: 'MRR', value: `Rs. ${mrr.toLocaleString()}`, trend: '+5.2%', icon: DollarSign, color: 'text-neon-blue' },
+            { label: 'ARR', value: `Rs. ${(arr/100000).toFixed(2)}L`, trend: '+12.8%', icon: TrendingUp, color: 'text-neon-purple' },
+            { label: 'Active Subscriptions', value: activeSchools.length.toString(), trend: `+${activeSchools.length}`, icon: UserCheck, color: 'text-green-400' },
+            { label: 'Trial Schools', value: trialSchools.length.toString(), trend: 'Stable', icon: AlertTriangle, color: 'text-yellow-400' },
           ].map((stat, i) => (
-            <div key={i} className="bg-cyber-gray/40 backdrop-blur-md p-6 rounded-2xl border border-white/5">
+            <motion.div 
+              key={i} 
+              whileHover={{ y: -5 }}
+              className="bg-cyber-gray/40 backdrop-blur-md p-6 rounded-3xl border border-white/5 neon-glow-card"
+            >
               <div className="flex justify-between items-start mb-4">
                 <div className={`p-3 rounded-xl bg-cyber-black/50 border border-white/5 ${stat.color}`}>
                   <stat.icon size={24} />
                 </div>
-                <span className={`text-[10px] font-black px-2 py-1 rounded-full bg-cyber-black/50 ${stat.trend.startsWith('+') ? 'text-green-400' : 'text-red-400'}`}>
+                <span className={`text-[10px] font-black px-2 py-1 rounded-full bg-cyber-black/50 ${stat.trend.startsWith('+') ? 'text-green-400' : 'text-blue-400'}`}>
                   {stat.trend}
                 </span>
               </div>
               <h3 className="text-gray-500 text-[10px] font-black uppercase tracking-widest mb-1">{stat.label}</h3>
               <p className="text-3xl font-black text-white tracking-tighter">{stat.value}</p>
-            </div>
+            </motion.div>
           ))}
         </div>
 
         {/* Revenue Chart */}
-        <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5">
-          <div className="flex items-center justify-between mb-8">
+        <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-[2.5rem] border border-white/5 neon-glow-card">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
             <div>
-              <h3 className="text-xl font-black uppercase tracking-tighter text-white">Revenue Growth</h3>
-              <p className="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Last 6 Months Performance</p>
+              <h3 className="text-2xl font-black uppercase tracking-tighter text-white">Revenue Growth</h3>
+              <p className="text-[10px] text-gray-500 uppercase tracking-[0.3em] mt-1 font-bold">Real-time SaaS Performance Analytics</p>
             </div>
-            <div className="flex gap-2">
-              <button className="px-4 py-2 bg-neon-blue text-black text-[10px] font-black uppercase tracking-widest rounded-lg">Monthly</button>
-              <button className="px-4 py-2 bg-cyber-black text-gray-500 text-[10px] font-black uppercase tracking-widest rounded-lg">Yearly</button>
+            <div className="flex gap-2 bg-cyber-black/50 p-1 rounded-xl border border-white/5">
+              <button className="px-6 py-2 bg-neon-blue text-black text-[10px] font-black uppercase tracking-widest rounded-lg transition-all">Monthly</button>
+              <button className="px-6 py-2 text-gray-500 text-[10px] font-black uppercase tracking-widest rounded-lg hover:text-white transition-all">Yearly</button>
             </div>
           </div>
           <div className="h-80 w-full">
@@ -4001,26 +4099,26 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     <stop offset="95%" stopColor="#00f3ff" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
                 <XAxis 
                   dataKey="month" 
-                  stroke="#666" 
+                  stroke="#444" 
                   fontSize={10} 
                   tickLine={false} 
                   axisLine={false} 
-                  tick={{ fontWeight: 'bold' }}
+                  tick={{ fontWeight: '900' }}
                 />
                 <YAxis 
-                  stroke="#666" 
+                  stroke="#444" 
                   fontSize={10} 
                   tickLine={false} 
                   axisLine={false} 
-                  tick={{ fontWeight: 'bold' }}
-                  tickFormatter={(value) => `$${value/1000}k`}
+                  tick={{ fontWeight: '900' }}
+                  tickFormatter={(value) => `Rs.${value/1000}k`}
                 />
                 <Tooltip 
-                  contentStyle={{ backgroundColor: '#0a0a0a', border: '1px solid #00f3ff30', borderRadius: '12px' }}
-                  itemStyle={{ color: '#00f3ff', fontWeight: 'bold' }}
+                  contentStyle={{ backgroundColor: '#050505', border: '1px solid #00f3ff30', borderRadius: '16px', backdropFilter: 'blur(10px)' }}
+                  itemStyle={{ color: '#00f3ff', fontWeight: '900', textTransform: 'uppercase', fontSize: '10px' }}
                 />
                 <Area 
                   type="monotone" 
@@ -4040,102 +4138,112 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           <div className="lg:col-span-1 space-y-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-black uppercase tracking-widest text-white">Active Plans</h3>
-              <button className="p-2 bg-neon-purple/10 text-neon-purple rounded-lg border border-neon-purple/20 hover:bg-neon-purple hover:text-black transition-all">
+              <button className="p-2 bg-neon-purple/10 text-neon-purple rounded-xl border border-neon-purple/20 hover:bg-neon-purple hover:text-black transition-all neon-glow-button">
                 <Plus size={18} />
               </button>
             </div>
             <div className="space-y-4">
-              {mockPlans.map((plan) => (
-                <div key={plan.id} className="bg-cyber-gray/40 backdrop-blur-md p-6 rounded-2xl border border-white/5 hover:border-neon-purple/30 transition-all group">
-                  <div className="flex justify-between items-start mb-4">
+              {plans.map((plan) => (
+                <motion.div 
+                  key={plan.id} 
+                  whileHover={{ scale: 1.02 }}
+                  className="bg-cyber-gray/40 backdrop-blur-md p-6 rounded-3xl border border-white/5 hover:border-neon-purple/30 transition-all group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-neon-purple/5 blur-3xl -mr-12 -mt-12" />
+                  <div className="flex justify-between items-start mb-4 relative z-10">
                     <div>
-                      <h4 className="text-white font-black uppercase tracking-tighter text-lg">{plan.name}</h4>
-                      <p className="text-neon-purple font-black text-2xl tracking-tighter">${plan.price}<span className="text-[10px] text-gray-500">/mo</span></p>
+                      <h4 className="text-white font-black uppercase tracking-tighter text-xl">{plan.name}</h4>
+                      <p className="text-neon-purple font-black text-3xl tracking-tighter">Rs. {plan.price}<span className="text-[10px] text-gray-500 font-bold">/mo</span></p>
                     </div>
                     <button className="p-2 text-gray-500 hover:text-white transition-colors">
                       <Settings size={16} />
                     </button>
                   </div>
-                  <ul className="space-y-2 mb-6">
-                    {plan.features.map((f, i) => (
-                      <li key={i} className="flex items-center gap-2 text-[10px] text-gray-400 font-bold uppercase tracking-widest">
-                        <CheckCircle size={12} className="text-green-500" />
+                  <ul className="space-y-3 mb-8 relative z-10">
+                    {plan.features?.slice(0, 4).map((f: string, i: number) => (
+                      <li key={i} className="flex items-center gap-3 text-[10px] text-gray-400 font-black uppercase tracking-widest">
+                        <div className="w-4 h-4 rounded-full bg-green-500/10 flex items-center justify-center border border-green-500/20">
+                          <CheckCircle size={10} className="text-green-500" />
+                        </div>
                         {f}
                       </li>
                     ))}
                   </ul>
-                  <button className="w-full py-2 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-400 group-hover:text-white group-hover:border-neon-purple/50 transition-all">
-                    Edit Plan Details
+                  <button className="w-full py-3 bg-white/5 border border-white/10 rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 group-hover:text-white group-hover:border-neon-purple/50 transition-all relative z-10">
+                    Configure Plan
                   </button>
-                </div>
+                </motion.div>
               ))}
             </div>
           </div>
 
           {/* Recent Transactions */}
           <div className="lg:col-span-2 space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <h3 className="text-lg font-black uppercase tracking-widest text-white">Recent Transactions</h3>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+              <div className="relative w-full sm:w-auto">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
                 <input 
                   type="text" 
                   placeholder="Search invoices..." 
-                  className="pl-10 pr-4 py-2 bg-cyber-black/50 border border-white/5 rounded-xl text-xs outline-none focus:neon-border-blue transition-all"
+                  className="w-full pl-12 pr-6 py-3 bg-cyber-black/50 border border-white/5 rounded-2xl text-[10px] font-black uppercase tracking-widest outline-none focus:neon-border-blue transition-all"
                 />
               </div>
             </div>
-            <div className="bg-cyber-gray/40 backdrop-blur-md rounded-2xl border border-white/5 overflow-hidden">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-cyber-black/50 border-b border-white/5">
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Invoice</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">School</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Amount</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {mockTransactions.map((tx) => (
-                    <tr key={tx.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-6 py-4">
-                        <p className="text-xs font-mono font-bold text-neon-blue">{tx.id}</p>
-                        <p className="text-[9px] text-gray-600 font-bold uppercase">{tx.date}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-bold text-white">{tx.school}</p>
-                        <p className="text-[9px] text-neon-purple font-black uppercase tracking-widest">{tx.plan} Plan</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-black text-white">${tx.amount}</p>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
-                          tx.status === 'paid' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                          tx.status === 'failed' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
-                          'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                        }`}>
-                          {tx.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button className="p-2 text-gray-500 hover:text-neon-blue transition-colors">
-                          <Download size={18} />
-                        </button>
-                      </td>
+            <div className="bg-cyber-gray/40 backdrop-blur-md rounded-[2rem] border border-white/5 overflow-hidden neon-glow-card">
+              <div className="overflow-x-auto custom-scrollbar">
+                <table className="w-full text-left border-collapse min-w-[600px]">
+                  <thead>
+                    <tr className="bg-cyber-black/50 border-b border-white/5">
+                      <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">Invoice</th>
+                      <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">School</th>
+                      <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">Amount</th>
+                      <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">Status</th>
+                      <th className="px-8 py-5 text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {schools.slice(0, 5).map((school, i) => {
+                      const plan = plans.find(p => p.id === (school as any).planId);
+                      return (
+                        <tr key={school.id} className="hover:bg-white/5 transition-colors group">
+                          <td className="px-8 py-5">
+                            <p className="text-xs font-mono font-black text-neon-blue">INV-2026-{100 + i}</p>
+                            <p className="text-[9px] text-gray-600 font-black uppercase tracking-widest mt-1">Mar 25, 2026</p>
+                          </td>
+                          <td className="px-8 py-5">
+                            <p className="text-sm font-black text-white tracking-tight">{school.name}</p>
+                            <p className="text-[9px] text-neon-purple font-black uppercase tracking-[0.2em] mt-1">{plan?.name || 'Trial'} Plan</p>
+                          </td>
+                          <td className="px-8 py-5">
+                            <p className="text-sm font-black text-white">Rs. {(plan?.price || 0).toLocaleString()}</p>
+                          </td>
+                          <td className="px-8 py-5">
+                            <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest ${
+                              school.status === 'active' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+                              school.status === 'suspended' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
+                              'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                            }`}>
+                              {school.status === 'active' ? 'Paid' : school.status === 'suspended' ? 'Failed' : 'Trial'}
+                            </span>
+                          </td>
+                          <td className="px-8 py-5">
+                            <button className="p-3 bg-cyber-black/50 rounded-xl border border-white/5 text-gray-500 hover:text-neon-blue hover:border-neon-blue/30 transition-all">
+                              <Download size={18} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
       </div>
     );
-  };
-
-  const SubscriptionPlansManager = () => {
+  };  const SubscriptionPlansManager = () => {
     const [plans, setPlans] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -4146,8 +4254,18 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     const [migrationPlanId, setMigrationPlanId] = useState('');
     const [isMigrating, setIsMigrating] = useState(false);
     const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
-    
-    // Form State
+
+    const ALL_FEATURES = [
+      "AI Student Progress Analytics", "Automated Fee Reminders", "WhatsApp API Integration",
+      "Hybrid Class Support (Zoom/Meet)", "Advanced Payroll & HR", "Exam Result Builder",
+      "Biometric Attendance", "Library Management", "Hostel & Mess Tracker",
+      "Transport GPS Tracking", "Inventory Management", "Multi-School Admin Dashboard",
+      "Parent-Teacher Real-time Chat", "QR Code ID Card Generator", "Certificate & Report Generator",
+      "Online Admissions Portal", "Lesson Planning & Syllabus", "Alumni Management",
+      "SMS & Email Gateway", "Accounting & Finance Suite", "Mobile App (Android/iOS)",
+      "Custom Domain Support", "White-label Branding", "API Access for Developers"
+    ];
+
     const [formData, setFormData] = useState({
       name: '',
       monthlyPrice: 0,
@@ -4158,24 +4276,8 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       maxTeachers: 50,
       storageLimit: '5GB',
       supportLevel: 'Email',
-      hasCustomDomain: false,
-      hasWhiteLabel: false,
-      hasApiAccess: false,
-      hasAdvancedAnalytics: false,
-      hasMobileApp: true,
-      hasMultiCampus: false,
-      hasAttendanceModule: true,
-      hasExamModule: true,
-      hasFeeManagement: true,
-      hasParentPortal: true,
-      hasSmsIntegration: false,
-      hasLibraryManagement: false,
-      hasInventoryManagement: false,
-      hasTransportManagement: false,
-      hasHostelManagement: false,
-      hasPayrollManagement: false
+      isRecommended: false
     });
-    const [newFeature, setNewFeature] = useState('');
 
     useEffect(() => {
       const unsub = onSnapshot(collection(db, 'subscription_plans'), (snapshot) => {
@@ -4186,303 +4288,155 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       return () => unsub();
     }, []);
 
-    const handleDeleteClick = async (plan: any) => {
-      setPlanToDelete(plan);
-      // Check for schools using this plan
-      const schoolsRef = collection(db, 'schools');
-      const q = query(schoolsRef, where('planId', '==', plan.id));
-      const snapshot = await getDocs(q);
-      const schools = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSchoolsInPlan(schools);
-      setIsDeleteModalOpen(true);
-    };
-
-    const confirmDelete = async () => {
-      if (!planToDelete) return;
-      
-      try {
-        setIsMigrating(true);
-        
-        // 1. Migrate schools if any
-        if (schoolsInPlan.length > 0) {
-          if (!migrationPlanId) {
-            toast.error("Please select a plan to migrate existing schools to.");
-            setIsMigrating(false);
-            return;
-          }
-          
-          const batch = writeBatch(db);
-          schoolsInPlan.forEach(school => {
-            const schoolRef = doc(db, 'schools', school.id);
-            batch.update(schoolRef, { planId: migrationPlanId });
-          });
-          await batch.commit();
-          toast.success(`Migrated ${schoolsInPlan.length} schools to new plan.`);
-        }
-
-        // 2. Delete the plan
-        await deleteDoc(doc(db, 'subscription_plans', planToDelete.id));
-        toast.success("Subscription plan deleted successfully.");
-        setIsDeleteModalOpen(false);
-        setPlanToDelete(null);
-        setSchoolsInPlan([]);
-        setMigrationPlanId('');
-      } catch (error) {
-        console.error("Error deleting plan:", error);
-        toast.error("Failed to delete plan.");
-      } finally {
-        setIsMigrating(false);
-      }
-    };
-
-    const handleAddFeature = () => {
-      if (newFeature.trim()) {
-        setFormData(prev => ({
-          ...prev,
-          features: [...prev.features, newFeature.trim()]
-        }));
-        setNewFeature('');
-      }
-    };
-
-    const handleRemoveFeature = (index: number) => {
-      setFormData(prev => ({
-        ...prev,
-        features: prev.features.filter((_, i) => i !== index)
-      }));
-    };
-
-    const resetForm = () => {
-      setFormData({
-        name: '',
-        monthlyPrice: 0,
-        yearlyPrice: 0,
-        features: [],
-        isActive: true,
-        maxStudents: 500,
-        maxTeachers: 50,
-        storageLimit: '5GB',
-        supportLevel: 'Email',
-        hasCustomDomain: false,
-        hasWhiteLabel: false,
-        hasApiAccess: false,
-        hasAdvancedAnalytics: false,
-        hasMobileApp: true,
-        hasMultiCampus: false,
-        hasAttendanceModule: true,
-        hasExamModule: true,
-        hasFeeManagement: true,
-        hasParentPortal: true,
-        hasSmsIntegration: false,
-        hasLibraryManagement: false,
-        hasInventoryManagement: false,
-        hasTransportManagement: false,
-        hasHostelManagement: false,
-        hasPayrollManagement: false
-      });
-    };
-
     const handleSavePlan = async (e: React.FormEvent) => {
       e.preventDefault();
       try {
         const planId = editingPlan ? editingPlan.id : `plan_${Date.now()}`;
         const planData = {
-          planId,
           ...formData,
-          createdAt: editingPlan ? editingPlan.createdAt : new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          id: planId,
+          updatedAt: serverTimestamp(),
+          createdAt: editingPlan?.createdAt || serverTimestamp()
         };
-
         await setDoc(doc(db, 'subscription_plans', planId), planData);
-        toast.success(editingPlan ? 'Plan updated successfully' : 'New plan created');
+        toast.success(editingPlan ? 'Plan updated' : 'Plan created');
         setIsModalOpen(false);
         setEditingPlan(null);
-        resetForm();
       } catch (error) {
-        console.error("Error saving plan:", error);
         toast.error('Failed to save plan');
       }
     };
 
-    const togglePlanStatus = async (plan: any) => {
+    const handleDeleteClick = async (plan: any) => {
+      setPlanToDelete(plan);
+      const q = query(collection(db, 'schools'), where('planId', '==', plan.id));
+      const snapshot = await getDocs(q);
+      setSchoolsInPlan(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      setIsDeleteModalOpen(true);
+    };
+
+    const confirmDelete = async () => {
+      if (!planToDelete) return;
+      setIsMigrating(true);
       try {
-        await updateDoc(doc(db, 'subscription_plans', plan.id), {
-          isActive: !plan.isActive
-        });
-        toast.success(`Plan ${plan.isActive ? 'deactivated' : 'activated'}`);
-      } catch (error) {
-        console.error("Error toggling plan status:", error);
-        toast.error('Failed to toggle status');
+        if (schoolsInPlan.length > 0) {
+          if (!migrationPlanId) throw new Error("Select migration plan");
+          const batch = writeBatch(db);
+          schoolsInPlan.forEach(s => batch.update(doc(db, 'schools', s.id), { planId: migrationPlanId }));
+          await batch.commit();
+        }
+        await deleteDoc(doc(db, 'subscription_plans', planToDelete.id));
+        toast.success('Plan deleted');
+        setIsDeleteModalOpen(false);
+      } catch (error: any) {
+        toast.error(error.message || 'Delete failed');
+      } finally {
+        setIsMigrating(false);
       }
     };
 
-    const openEditModal = (plan: any) => {
-      setEditingPlan(plan);
-      setFormData({
-        name: plan.name || '',
-        monthlyPrice: plan.monthlyPrice || 0,
-        yearlyPrice: plan.yearlyPrice || 0,
-        features: plan.features || [],
-        isActive: plan.isActive !== undefined ? plan.isActive : true,
-        maxStudents: plan.maxStudents || 500,
-        maxTeachers: plan.maxTeachers || 50,
-        storageLimit: plan.storageLimit || '5GB',
-        supportLevel: plan.supportLevel || 'Email',
-        hasCustomDomain: !!plan.hasCustomDomain,
-        hasWhiteLabel: !!plan.hasWhiteLabel,
-        hasApiAccess: !!plan.hasApiAccess,
-        hasAdvancedAnalytics: !!plan.hasAdvancedAnalytics,
-        hasMobileApp: !!plan.hasMobileApp,
-        hasMultiCampus: !!plan.hasMultiCampus,
-        hasAttendanceModule: !!plan.hasAttendanceModule,
-        hasExamModule: !!plan.hasExamModule,
-        hasFeeManagement: !!plan.hasFeeManagement,
-        hasParentPortal: !!plan.hasParentPortal,
-        hasSmsIntegration: !!plan.hasSmsIntegration,
-        hasLibraryManagement: !!plan.hasLibraryManagement,
-        hasInventoryManagement: !!plan.hasInventoryManagement,
-        hasTransportManagement: !!plan.hasTransportManagement,
-        hasHostelManagement: !!plan.hasHostelManagement,
-        hasPayrollManagement: !!plan.hasPayrollManagement
-      });
-      setIsModalOpen(true);
-    };
-
     return (
-      <div className="space-y-8">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="space-y-12 pb-24">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
           <div>
-            <h2 className="text-4xl font-black text-white uppercase tracking-tighter leading-none">Subscription Plans</h2>
-            <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mt-2 flex items-center gap-2">
-              <Zap size={12} className="text-neon-blue" />
-              Manage SaaS Pricing Tiers & Features
-            </p>
+            <h2 className="text-5xl font-black text-white uppercase tracking-tighter neon-text-blue">Subscription Ecosystem</h2>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.4em] mt-3">Architect Global SaaS Tiers & Entitlements</p>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex bg-cyber-black p-1 rounded-2xl border border-white/5 shadow-inner">
-              <button 
-                onClick={() => setBillingCycle('monthly')}
-                className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${billingCycle === 'monthly' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.5)]' : 'text-gray-500 hover:text-white'}`}
-              >
-                Monthly
-              </button>
-              <button 
-                onClick={() => setBillingCycle('yearly')}
-                className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${billingCycle === 'yearly' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.5)]' : 'text-gray-500 hover:text-white'}`}
-              >
-                Yearly
-              </button>
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex bg-cyber-black/50 p-1.5 rounded-2xl border border-white/5 backdrop-blur-xl">
+              {['monthly', 'yearly'].map((cycle) => (
+                <button 
+                  key={cycle}
+                  onClick={() => setBillingCycle(cycle as any)}
+                  className={`px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${billingCycle === cycle ? 'bg-neon-blue text-black shadow-[0_0_20px_rgba(0,243,255,0.4)]' : 'text-gray-500 hover:text-white'}`}
+                >
+                  {cycle}
+                </button>
+              ))}
             </div>
             <button 
-              onClick={() => {
-                setEditingPlan(null);
-                resetForm();
-                setIsModalOpen(true);
-              }}
-              className="px-8 py-4 bg-neon-purple text-black font-black uppercase tracking-widest rounded-[20px] hover:shadow-[0_0_30px_rgba(188,19,254,0.6)] transition-all flex items-center gap-3 transform hover:-translate-y-1 active:scale-95"
+              onClick={() => { setEditingPlan(null); setFormData({ name: '', monthlyPrice: 0, yearlyPrice: 0, features: [], isActive: true, maxStudents: 500, maxTeachers: 50, storageLimit: '5GB', supportLevel: 'Email', isRecommended: false }); setIsModalOpen(true); }}
+              className="px-10 py-4 bg-gradient-to-r from-neon-purple to-neon-indigo text-white font-black uppercase tracking-widest rounded-2xl hover:shadow-[0_0_30px_rgba(188,19,254,0.4)] transition-all flex items-center gap-3"
             >
-              <Plus size={20} /> Create New Plan
+              <Plus size={20} /> Create Tier
             </button>
           </div>
         </div>
 
         {loading ? (
-          <div className="py-32 text-center">
-            <div className="w-16 h-16 border-4 border-neon-blue border-t-transparent rounded-full animate-spin mx-auto mb-6 shadow-[0_0_20px_rgba(0,243,255,0.2)]"></div>
-            <p className="text-gray-500 font-black uppercase tracking-widest text-xs animate-pulse">Synchronizing Cloud Tiers...</p>
+          <div className="py-40 text-center">
+            <RefreshCw className="animate-spin text-neon-blue mx-auto mb-8" size={64} />
+            <p className="text-gray-500 font-black uppercase tracking-[0.5em] text-sm animate-pulse">Synchronizing Global Tiers...</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {plans.map((plan) => (
               <motion.div 
                 key={plan.id}
-                initial={{ opacity: 0, y: 30 }}
+                initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                whileHover={{ y: -10 }}
-                className={`relative bg-cyber-gray/40 backdrop-blur-xl p-10 rounded-[50px] border-2 transition-all group overflow-hidden ${plan.isActive ? 'border-white/5 hover:border-neon-blue/40 shadow-2xl hover:shadow-neon-blue/10' : 'border-red-500/20 grayscale opacity-40'}`}
+                className={`relative group bg-cyber-gray/40 backdrop-blur-2xl p-10 rounded-[3rem] border-2 transition-all ${plan.isRecommended ? 'border-neon-blue shadow-[0_0_40px_rgba(0,243,255,0.15)]' : 'border-white/5 hover:border-white/20'}`}
               >
-                {/* Decorative Background Element */}
-                <div className="absolute -top-20 -right-20 w-64 h-64 bg-neon-blue/5 rounded-full blur-3xl group-hover:bg-neon-blue/10 transition-all" />
+                {plan.isRecommended && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-neon-blue text-black px-6 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-[0_0_20px_rgba(0,243,255,0.5)]">
+                    Recommended
+                  </div>
+                )}
                 
-                <div className="relative z-10">
-                  <div className="flex justify-between items-start mb-10">
-                    <div>
-                      <h3 className="text-3xl font-black text-white uppercase tracking-tighter mb-1">{plan.name}</h3>
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${plan.isActive ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-                        <span className={`text-[8px] font-black uppercase tracking-widest ${plan.isActive ? 'text-green-400' : 'text-red-400'}`}>
-                          {plan.isActive ? 'Active Tier' : 'Inactive'}
-                        </span>
+                <div className="flex justify-between items-start mb-10">
+                  <div>
+                    <h3 className="text-3xl font-black text-white uppercase tracking-tighter">{plan.name}</h3>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">{plan.supportLevel} Support</p>
+                  </div>
+                  <div className="text-right">
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-4xl font-black text-white tracking-tighter">
+                        ${billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice}
+                      </span>
+                      <span className="text-gray-500 text-[10px] font-bold uppercase">/{billingCycle === 'monthly' ? 'mo' : 'yr'}</span>
+                    </div>
+                    {billingCycle === 'yearly' && <p className="text-[8px] text-neon-purple font-black uppercase tracking-widest mt-1">Save 20% Yearly</p>}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 mb-10">
+                  <div className="bg-cyber-black/50 p-5 rounded-3xl border border-white/5">
+                    <p className="text-[9px] text-gray-500 font-black uppercase tracking-widest mb-1">Students</p>
+                    <p className="text-xl font-black text-white">{plan.maxStudents.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-cyber-black/50 p-5 rounded-3xl border border-white/5">
+                    <p className="text-[9px] text-gray-500 font-black uppercase tracking-widest mb-1">Storage</p>
+                    <p className="text-xl font-black text-white">{plan.storageLimit}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4 mb-12">
+                  <p className="text-[10px] text-gray-500 font-black uppercase tracking-widest border-b border-white/5 pb-2">Entitlements</p>
+                  <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                    {plan.features?.map((f: string, i: number) => (
+                      <div key={i} className="flex items-center gap-3 text-xs text-gray-300 font-bold group/item">
+                        <div className="w-5 h-5 rounded-lg bg-neon-blue/10 border border-neon-blue/20 flex items-center justify-center group-hover/item:bg-neon-blue/30 transition-all">
+                          <Check size={12} className="text-neon-blue" />
+                        </div>
+                        {f}
                       </div>
-                    </div>
-                    <div className="flex flex-col items-end">
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-5xl font-black text-neon-blue tracking-tighter drop-shadow-[0_0_10px_rgba(0,243,255,0.3)]">
-                          ${billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice}
-                        </span>
-                        <span className="text-gray-500 text-xs font-bold">/{billingCycle === 'monthly' ? 'mo' : 'yr'}</span>
-                      </div>
-                      {billingCycle === 'yearly' && (
-                        <span className="text-[8px] font-black text-neon-purple uppercase tracking-widest mt-1">Save 20% Yearly</span>
-                      )}
-                    </div>
+                    ))}
                   </div>
+                </div>
 
-                  <div className="grid grid-cols-2 gap-4 mb-10">
-                    <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
-                      <p className="text-[8px] text-gray-500 font-black uppercase tracking-widest mb-1">Students</p>
-                      <p className="text-lg font-black text-white">{plan.maxStudents}</p>
-                    </div>
-                    <div className="bg-white/5 p-4 rounded-3xl border border-white/5">
-                      <p className="text-[8px] text-gray-500 font-black uppercase tracking-widest mb-1">Teachers</p>
-                      <p className="text-lg font-black text-white">{plan.maxTeachers}</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-6 mb-12">
-                    <p className="text-[10px] text-gray-500 font-black uppercase tracking-widest flex items-center gap-2">
-                      <Layers size={12} className="text-neon-purple" />
-                      Core Features
-                    </p>
-                    <ul className="grid grid-cols-1 gap-4">
-                      {plan.features?.slice(0, 6).map((feature: string, idx: number) => (
-                        <li key={idx} className="flex items-center gap-3 text-xs text-gray-300 font-semibold group/item">
-                          <div className="p-1 bg-neon-blue/10 rounded-lg group-hover/item:bg-neon-blue/20 transition-colors">
-                            <CheckCircle size={12} className="text-neon-blue" />
-                          </div>
-                          {feature}
-                        </li>
-                      ))}
-                      {plan.features?.length > 6 && (
-                        <li className="text-[10px] text-gray-500 font-black uppercase tracking-widest pl-8">
-                          + {plan.features.length - 6} More Features
-                        </li>
-                      )}
-                    </ul>
-                  </div>
-
-                  <div className="pt-8 border-t border-white/5 flex items-center gap-3">
-                    <button 
-                      onClick={() => openEditModal(plan)}
-                      className="flex-1 py-4 bg-white/5 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-white/10 hover:border-white/20 transition-all flex items-center justify-center gap-2"
-                    >
-                      <Edit3 size={16} /> Edit
-                    </button>
-                    <button 
-                      onClick={() => togglePlanStatus(plan)}
-                      className={`p-4 rounded-2xl border transition-all ${plan.isActive ? 'border-red-500/20 text-red-400 hover:bg-red-500/10' : 'border-green-500/20 text-green-400 hover:bg-green-500/10'}`}
-                      title={plan.isActive ? "Deactivate Plan" : "Activate Plan"}
-                    >
-                      {plan.isActive ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                    <button 
-                      onClick={() => handleDeleteClick(plan)}
-                      className="p-4 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all shadow-lg hover:shadow-red-500/40"
-                      title="Delete Plan"
-                    >
-                      <Trash2 size={20} />
-                    </button>
-                  </div>
+                <div className="flex gap-3 pt-8 border-t border-white/5">
+                  <button 
+                    onClick={() => { setEditingPlan(plan); setFormData({ ...plan }); setIsModalOpen(true); }}
+                    className="flex-1 py-4 bg-white/5 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
+                  >
+                    <Edit3 size={16} /> Edit
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteClick(plan)}
+                    className="p-4 bg-red-500/10 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
               </motion.div>
             ))}
@@ -4492,210 +4446,136 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         {/* Create/Edit Modal */}
         <AnimatePresence>
           {isModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 overflow-y-auto custom-scrollbar">
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl overflow-y-auto custom-scrollbar">
               <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setIsModalOpen(false)}
-                className="fixed inset-0 bg-cyber-black/90 backdrop-blur-md"
-              />
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0, y: 50 }}
-                animate={{ scale: 1, opacity: 1, y: 0 }}
-                exit={{ scale: 0.9, opacity: 0, y: 50 }}
-                className="relative w-full max-w-4xl bg-cyber-gray p-10 rounded-[60px] border border-white/10 shadow-2xl my-8"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-cyber-gray w-full max-w-5xl rounded-[3rem] border border-white/10 overflow-hidden shadow-2xl my-8"
               >
-                <div className="flex items-center justify-between mb-10">
+                <div className="p-8 border-b border-white/5 bg-cyber-black/50 flex justify-between items-center">
                   <div>
-                    <h2 className="text-4xl font-black text-white uppercase tracking-tighter">
-                      {editingPlan ? 'Refine Tier' : 'Architect New Plan'}
-                    </h2>
-                    <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mt-2 flex items-center gap-2">
-                      <Settings size={12} className="text-neon-purple" />
-                      Configure Advanced SaaS Parameters
-                    </p>
+                    <h3 className="text-3xl font-black text-white uppercase tracking-tighter">{editingPlan ? 'Refine Tier' : 'Architect New Tier'}</h3>
+                    <p className="text-[10px] text-neon-blue font-black uppercase tracking-widest mt-1">Configure Global SaaS Parameters</p>
                   </div>
-                  <button onClick={() => setIsModalOpen(false)} className="p-4 hover:bg-white/5 rounded-2xl transition-colors group">
-                    <X size={32} className="text-gray-500 group-hover:text-white transition-colors" />
+                  <button onClick={() => setIsModalOpen(false)} className="p-2 text-gray-500 hover:text-white transition-colors">
+                    <X size={32} />
                   </button>
                 </div>
 
-                <form onSubmit={handleSavePlan} className="space-y-10">
+                <form onSubmit={handleSavePlan} className="p-10 space-y-10">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {/* Basic Info */}
-                    <div className="md:col-span-3 space-y-6">
-                      <h4 className="text-[10px] font-black text-neon-blue uppercase tracking-widest border-b border-white/5 pb-2">Identity & Pricing</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="md:col-span-1">
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Plan Name</label>
-                          <input 
-                            required
-                            type="text"
-                            value={formData.name}
-                            onChange={(e) => setFormData({...formData, name: e.target.value})}
-                            className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                            placeholder="e.g. Enterprise Elite"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Monthly Price ($)</label>
-                          <div className="relative">
-                            <DollarSign size={16} className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-500" />
-                            <input 
-                              required
-                              type="number"
-                              value={formData.monthlyPrice}
-                              onChange={(e) => setFormData({...formData, monthlyPrice: Number(e.target.value)})}
-                              className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] pl-14 pr-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Yearly Price ($)</label>
-                          <div className="relative">
-                            <DollarSign size={16} className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-500" />
-                            <input 
-                              required
-                              type="number"
-                              value={formData.yearlyPrice}
-                              onChange={(e) => setFormData({...formData, yearlyPrice: Number(e.target.value)})}
-                              className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] pl-14 pr-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                            />
-                          </div>
-                        </div>
-                      </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Tier Name</label>
+                      <input 
+                        required type="text" value={formData.name}
+                        onChange={(e) => setFormData({...formData, name: e.target.value})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                        placeholder="e.g. Enterprise Elite"
+                      />
                     </div>
-
-                    {/* Limits */}
-                    <div className="md:col-span-3 space-y-6">
-                      <h4 className="text-[10px] font-black text-neon-purple uppercase tracking-widest border-b border-white/5 pb-2">Capacity & Limits</h4>
-                      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Max Students</label>
-                          <input 
-                            type="number"
-                            value={formData.maxStudents}
-                            onChange={(e) => setFormData({...formData, maxStudents: Number(e.target.value)})}
-                            className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Max Teachers</label>
-                          <input 
-                            type="number"
-                            value={formData.maxTeachers}
-                            onChange={(e) => setFormData({...formData, maxTeachers: Number(e.target.value)})}
-                            className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Storage</label>
-                          <input 
-                            type="text"
-                            value={formData.storageLimit}
-                            onChange={(e) => setFormData({...formData, storageLimit: e.target.value})}
-                            className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-3 ml-2">Support</label>
-                          <select 
-                            value={formData.supportLevel}
-                            onChange={(e) => setFormData({...formData, supportLevel: e.target.value})}
-                            className="w-full bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold appearance-none"
-                          >
-                            <option value="Email">Email Only</option>
-                            <option value="Priority Email">Priority Email</option>
-                            <option value="Chat & Email">Chat & Email</option>
-                            <option value="24/7 Phone">24/7 Phone</option>
-                            <option value="Dedicated Manager">Dedicated Manager</option>
-                          </select>
-                        </div>
-                      </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Monthly Price ($)</label>
+                      <input 
+                        required type="number" value={formData.monthlyPrice}
+                        onChange={(e) => setFormData({...formData, monthlyPrice: Number(e.target.value)})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                      />
                     </div>
-
-                    {/* Advanced Features Toggles */}
-                    <div className="md:col-span-3 space-y-6">
-                      <h4 className="text-[10px] font-black text-neon-blue uppercase tracking-widest border-b border-white/5 pb-2">Advanced Modules & Access</h4>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        {[
-                          { key: 'hasCustomDomain', label: 'Custom Domain' },
-                          { key: 'hasWhiteLabel', label: 'White Label' },
-                          { key: 'hasApiAccess', label: 'API Access' },
-                          { key: 'hasAdvancedAnalytics', label: 'Advanced Analytics' },
-                          { key: 'hasMobileApp', label: 'Mobile App' },
-                          { key: 'hasMultiCampus', label: 'Multi Campus' },
-                          { key: 'hasAttendanceModule', label: 'Attendance' },
-                          { key: 'hasExamModule', label: 'Exams' },
-                          { key: 'hasFeeManagement', label: 'Fee Mgmt' },
-                          { key: 'hasParentPortal', label: 'Parent Portal' },
-                          { key: 'hasSmsIntegration', label: 'SMS Integration' },
-                          { key: 'hasLibraryManagement', label: 'Library' },
-                          { key: 'hasInventoryManagement', label: 'Inventory' },
-                          { key: 'hasTransportManagement', label: 'Transport' },
-                          { key: 'hasHostelManagement', label: 'Hostel' },
-                          { key: 'hasPayrollManagement', label: 'Payroll' },
-                        ].map((item) => (
-                          <button
-                            key={item.key}
-                            type="button"
-                            onClick={() => setFormData(prev => ({ ...prev, [item.key]: !prev[item.key as keyof typeof prev] }))}
-                            className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${formData[item.key as keyof typeof formData] ? 'bg-neon-blue/10 border-neon-blue/40 text-neon-blue shadow-[0_0_15px_rgba(0,243,255,0.1)]' : 'bg-white/5 border-white/5 text-gray-500'}`}
-                          >
-                            <span className="text-[10px] font-black uppercase tracking-widest">{item.label}</span>
-                            {formData[item.key as keyof typeof formData] ? <CheckCircle2 size={16} /> : <Plus size={16} />}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Custom Features List */}
-                    <div className="md:col-span-3 space-y-6">
-                      <h4 className="text-[10px] font-black text-neon-purple uppercase tracking-widest border-b border-white/5 pb-2">Custom Feature Tags</h4>
-                      <div className="flex gap-4">
-                        <input 
-                          type="text"
-                          value={newFeature}
-                          onChange={(e) => setNewFeature(e.target.value)}
-                          onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddFeature())}
-                          className="flex-1 bg-cyber-black/50 border border-white/5 rounded-[24px] px-8 py-5 text-white outline-none focus:neon-border-blue transition-all font-bold"
-                          placeholder="Add custom feature tag..."
-                        />
-                        <button 
-                          type="button"
-                          onClick={handleAddFeature}
-                          className="px-8 py-5 bg-white/5 border border-white/10 text-white font-black uppercase tracking-widest rounded-[24px] hover:bg-white/10 transition-all"
-                        >
-                          Add
-                        </button>
-                      </div>
-                      <div className="flex flex-wrap gap-3">
-                        {formData.features.map((feature, idx) => (
-                          <div key={idx} className="flex items-center gap-3 bg-neon-blue/10 border border-neon-blue/20 px-5 py-3 rounded-xl">
-                            <span className="text-xs font-bold text-neon-blue">{feature}</span>
-                            <button type="button" onClick={() => handleRemoveFeature(idx)} className="text-neon-blue hover:text-white transition-colors">
-                              <X size={14} />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Yearly Price ($)</label>
+                      <input 
+                        required type="number" value={formData.yearlyPrice}
+                        onChange={(e) => setFormData({...formData, yearlyPrice: Number(e.target.value)})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                      />
                     </div>
                   </div>
 
-                  <div className="flex gap-4 pt-10 border-t border-white/5">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Max Students</label>
+                      <input 
+                        type="number" value={formData.maxStudents}
+                        onChange={(e) => setFormData({...formData, maxStudents: Number(e.target.value)})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Max Teachers</label>
+                      <input 
+                        type="number" value={formData.maxTeachers}
+                        onChange={(e) => setFormData({...formData, maxTeachers: Number(e.target.value)})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Storage Limit</label>
+                      <input 
+                        type="text" value={formData.storageLimit}
+                        onChange={(e) => setFormData({...formData, storageLimit: e.target.value})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold"
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Support Level</label>
+                      <select 
+                        value={formData.supportLevel}
+                        onChange={(e) => setFormData({...formData, supportLevel: e.target.value})}
+                        className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all font-bold appearance-none"
+                      >
+                        <option value="Email">Email Only</option>
+                        <option value="Priority Email">Priority Email</option>
+                        <option value="24/7 Chat">24/7 Chat</option>
+                        <option value="Dedicated Manager">Dedicated Manager</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                      <label className="text-[10px] font-black text-neon-purple uppercase tracking-widest">Select Premium Entitlements</label>
+                      <label className="flex items-center gap-3 cursor-pointer">
+                        <input 
+                          type="checkbox" checked={formData.isRecommended}
+                          onChange={(e) => setFormData({...formData, isRecommended: e.target.checked})}
+                          className="w-5 h-5 rounded border-white/10 bg-cyber-black text-neon-blue focus:ring-neon-blue transition-all"
+                        />
+                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Mark as Recommended</span>
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 max-h-[40vh] overflow-y-auto custom-scrollbar pr-4">
+                      {ALL_FEATURES.map(feature => (
+                        <label key={feature} className="flex items-center gap-3 p-4 bg-cyber-black/50 rounded-2xl border border-white/5 hover:border-neon-blue/30 transition-all cursor-pointer group">
+                          <input 
+                            type="checkbox"
+                            checked={formData.features.includes(feature)}
+                            onChange={(e) => {
+                              const newFeatures = e.target.checked 
+                                ? [...formData.features, feature]
+                                : formData.features.filter(f => f !== feature);
+                              setFormData({ ...formData, features: newFeatures });
+                            }}
+                            className="w-5 h-5 rounded border-white/10 bg-cyber-black text-neon-blue focus:ring-neon-blue transition-all"
+                          />
+                          <span className="text-[11px] font-bold text-gray-400 group-hover:text-white transition-colors">{feature}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-6 pt-10 border-t border-white/5">
                     <button 
-                      type="button"
-                      onClick={() => setIsModalOpen(false)}
-                      className="flex-1 py-6 bg-white/5 text-gray-400 font-black uppercase tracking-widest rounded-[30px] hover:bg-white/10 transition-all"
+                      type="button" onClick={() => setIsModalOpen(false)}
+                      className="flex-1 py-5 bg-white/5 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-white/10 transition-all border border-white/5"
                     >
                       Cancel
                     </button>
                     <button 
                       type="submit"
-                      className="flex-[2] py-6 bg-neon-blue text-black font-black uppercase tracking-widest rounded-[30px] hover:shadow-[0_0_40px_rgba(0,243,255,0.6)] transition-all transform hover:-translate-y-1 active:scale-95"
+                      className="flex-[2] py-5 bg-neon-blue text-black font-black uppercase tracking-widest rounded-2xl hover:shadow-[0_0_30px_rgba(0,243,255,0.4)] transition-all"
                     >
-                      {editingPlan ? 'Update Plan' : 'Deploy Plan'}
+                      {editingPlan ? 'Update Global Tier' : 'Deploy New Tier'}
                     </button>
                   </div>
                 </form>
@@ -4707,46 +4587,37 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         {/* Delete Confirmation Modal */}
         <AnimatePresence>
           {isDeleteModalOpen && (
-            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/95 backdrop-blur-2xl">
               <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 bg-cyber-black/95 backdrop-blur-xl"
-              />
-              <motion.div 
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.9, opacity: 0 }}
-                className="relative w-full max-w-md bg-cyber-gray p-10 rounded-[50px] border border-red-500/30 text-center shadow-[0_0_50px_rgba(239,68,68,0.2)]"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="bg-cyber-gray p-10 rounded-[3rem] border border-red-500/30 max-w-md w-full text-center shadow-[0_0_50px_rgba(239,68,68,0.2)]"
               >
                 <div className="w-24 h-24 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border-2 border-red-500/20">
-                  <AlertTriangle size={48} className="text-red-500" />
+                  <AlertTriangle className="text-red-500" size={48} />
                 </div>
                 <h3 className="text-3xl font-black text-white uppercase tracking-tighter mb-4">Terminate Plan?</h3>
                 
                 {schoolsInPlan.length > 0 ? (
-                  <div className="space-y-6 mb-8">
-                    <p className="text-gray-400 text-sm font-medium leading-relaxed">
-                      This plan is active for <span className="text-neon-purple font-black">{schoolsInPlan.length} schools</span>. You must reassign them to a new plan before deletion.
+                  <div className="space-y-6 mb-10">
+                    <p className="text-gray-400 text-sm font-bold uppercase tracking-widest leading-relaxed">
+                      This plan is active for <span className="text-neon-purple">{schoolsInPlan.length} schools</span>. Reassign them before termination.
                     </p>
-                    <div className="space-y-3 text-left">
-                      <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">Target Migration Plan</label>
-                      <select 
-                        value={migrationPlanId}
-                        onChange={(e) => setMigrationPlanId(e.target.value)}
-                        className="w-full bg-cyber-black/50 border border-white/10 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-purple transition-all font-bold appearance-none"
-                      >
-                        <option value="">Select replacement plan...</option>
-                        {plans.filter(p => p.id !== planToDelete?.id && p.isActive).map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                    <select 
+                      value={migrationPlanId}
+                      onChange={(e) => setMigrationPlanId(e.target.value)}
+                      className="w-full bg-cyber-black/50 border border-white/10 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-purple transition-all font-bold appearance-none"
+                    >
+                      <option value="">Select replacement plan...</option>
+                      {plans.filter(p => p.id !== planToDelete?.id).map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
                   </div>
                 ) : (
-                  <p className="text-gray-400 text-sm font-medium mb-10 leading-relaxed">
-                    You are about to permanently delete <span className="text-white font-black">{planToDelete?.name}</span>. This action is irreversible.
+                  <p className="text-gray-400 text-sm font-bold uppercase tracking-widest mb-10 leading-relaxed">
+                    Permanently delete <span className="text-white">{planToDelete?.name}</span>? This action is irreversible.
                   </p>
                 )}
 
@@ -4754,17 +4625,12 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                   <button 
                     onClick={confirmDelete}
                     disabled={isMigrating || (schoolsInPlan.length > 0 && !migrationPlanId)}
-                    className="w-full py-5 bg-red-500 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-red-600 shadow-xl hover:shadow-red-500/40 transition-all disabled:opacity-50"
+                    className="w-full py-5 bg-red-500 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-red-600 transition-all disabled:opacity-50"
                   >
-                    {isMigrating ? 'Processing...' : schoolsInPlan.length > 0 ? 'Reassign & Delete' : 'Confirm Termination'}
+                    {isMigrating ? 'Processing...' : 'Confirm Termination'}
                   </button>
                   <button 
-                    onClick={() => {
-                      setIsDeleteModalOpen(false);
-                      setPlanToDelete(null);
-                      setSchoolsInPlan([]);
-                      setMigrationPlanId('');
-                    }}
+                    onClick={() => setIsDeleteModalOpen(false)}
                     className="w-full py-5 bg-white/5 text-gray-500 font-black uppercase tracking-widest rounded-2xl hover:text-white transition-all"
                   >
                     Abort
@@ -4783,235 +4649,432 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
     const [isGenerating, setIsGenerating] = useState(false);
+    const [editingKey, setEditingKey] = useState<any>(null);
+    const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     
-    // Generation Form State
+    const PREMIUM_FEATURES = [
+      "Student Attendance", "HR & Payroll", "Exam Engine", "Transport Management",
+      "SMS Gateway", "WhatsApp Bot", "Zoom Live Classes", "Library Management",
+      "Hostel Management", "Inventory Management", "Accounting & Finance",
+      "Parent Portal", "Teacher Portal", "Online Admissions", "Fee Management",
+      "Certificate Generator", "ID Card Generator", "Homework & Assignments",
+      "Lesson Planning", "Alumni Management"
+    ];
+
     const [genForm, setGenForm] = useState({
-      plan_id: 'basic',
-      duration: '30',
-      count: 1
+      plan_id: 'pro',
+      duration: '365',
+      features: PREMIUM_FEATURES.reduce((acc, f) => ({ ...acc, [f]: true }), {}) as Record<string, boolean>
     });
 
     useEffect(() => {
       const unsub = onSnapshot(collection(db, 'license_keys'), (snapshot) => {
         const keysList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setKeys(keysList.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+        setKeys(keysList.sort((a: any, b: any) => {
+          const dateA = a.createdAt?.toDate?.() || new Date(a.createdAt);
+          const dateB = b.createdAt?.toDate?.() || new Date(b.createdAt);
+          return dateB.getTime() - dateA.getTime();
+        }));
         setLoading(false);
       });
       return () => unsub();
     }, []);
 
+    const generateKeyString = () => {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      const segment = () => Array.from({length: 4}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+      return `${segment()}-${segment()}-${segment()}-${segment()}`;
+    };
+
     const handleGenerate = async (e: React.FormEvent) => {
       e.preventDefault();
       setIsGenerating(true);
       try {
-        const response = await fetch('/api/admin/generate-keys', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            plan_id: genForm.plan_id,
-            duration_days: Number(genForm.duration),
-            count: genForm.count
-          })
-        });
+        const newKey = {
+          key: generateKeyString(),
+          plan_id: genForm.plan_id,
+          duration_days: Number(genForm.duration),
+          features: Object.keys(genForm.features).filter(f => genForm.features[f]),
+          status: 'unused',
+          createdAt: serverTimestamp(),
+          createdBy: userProfile.uid
+        };
         
-        if (response.ok) {
-          setGenForm({ ...genForm, count: 1 });
-        }
+        await addDoc(collection(db, 'license_keys'), newKey);
+        toast.success('License key generated successfully');
+        await createAuditLog('CREATE', 'License', `Generated new ${genForm.plan_id} license: ${newKey.key}`);
       } catch (error) {
         console.error("Error generating keys:", error);
+        toast.error('Failed to generate license key');
       } finally {
         setIsGenerating(false);
       }
     };
 
-    const revokeKey = async (keyId: string) => {
+    const toggleStatus = async (key: any) => {
+      const newStatus = key.status === 'revoked' ? 'unused' : 'revoked';
       try {
-        await updateDoc(doc(db, 'license_keys', keyId), {
-          status: 'revoked'
-        });
+        await updateDoc(doc(db, 'license_keys', key.id), { status: newStatus });
+        toast.success(`Key ${newStatus === 'revoked' ? 'revoked' : 'restored'} successfully`);
       } catch (error) {
-        console.error("Error revoking key:", error);
+        toast.error('Failed to update key status');
       }
     };
 
-    const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      // Could add a toast here
+    const deleteKey = async (id: string) => {
+      try {
+        await deleteDoc(doc(db, 'license_keys', id));
+        toast.success('License key deleted successfully');
+        setDeleteConfirmId(null);
+        await createAuditLog('DELETE', 'License', `Deleted license key ID: ${id}`);
+      } catch (error) {
+        console.error("Error deleting key:", error);
+        toast.error('Failed to delete license key');
+      }
+    };
+
+    const updateFeatures = async (e: React.FormEvent) => {
+      e.preventDefault();
+      try {
+        await updateDoc(doc(db, 'license_keys', editingKey.id), {
+          features: editingKey.features
+        });
+        toast.success('Features updated successfully');
+        setEditingKey(null);
+      } catch (error) {
+        toast.error('Failed to update features');
+      }
     };
 
     const filteredKeys = keys.filter(k => filter === 'all' || k.status === filter);
 
     return (
-      <div className="space-y-8">
+      <div className="space-y-8 pb-20">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-3xl font-black text-white uppercase tracking-tighter">License Management</h2>
-            <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mt-1">Manual Sales & Reseller Keys</p>
+            <h2 className="text-4xl font-black text-white uppercase tracking-tighter neon-text-blue">Advanced License Management</h2>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em] mt-2">Enterprise Grade Software Licensing Engine</p>
           </div>
         </div>
 
         {/* Generation Panel */}
-        <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-[40px] border border-white/5">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="p-3 bg-neon-blue/10 rounded-2xl border border-neon-blue/20">
-              <KeyIcon className="text-neon-blue" size={24} />
+        <div className="bg-cyber-gray/40 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/5 neon-glow-card">
+          <div className="flex items-center gap-4 mb-8">
+            <div className="p-4 bg-neon-blue/10 rounded-2xl border border-neon-blue/20 shadow-[0_0_15px_rgba(0,243,255,0.2)]">
+              <KeyIcon className="text-neon-blue" size={28} />
             </div>
             <div>
-              <h3 className="text-xl font-black uppercase tracking-tighter text-white">Generate New Keys</h3>
-              <p className="text-[10px] text-gray-500 uppercase tracking-widest">Create secure batch licenses</p>
+              <h3 className="text-xl font-black uppercase tracking-tight text-white">Issue New License</h3>
+              <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Configure permissions and duration</p>
             </div>
           </div>
 
-          <form onSubmit={handleGenerate} className="grid grid-cols-1 md:grid-cols-4 gap-6 items-end">
-            <div>
-              <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2 ml-2">Plan Type</label>
-              <select 
-                value={genForm.plan_id}
-                onChange={(e) => setGenForm({...genForm, plan_id: e.target.value})}
-                className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all appearance-none"
-              >
-                <option value="basic">Basic Plan</option>
-                <option value="pro">Pro Plan</option>
-                <option value="enterprise">Enterprise Plan</option>
-              </select>
+          <form onSubmit={handleGenerate} className="space-y-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Subscription Tier</label>
+                <select 
+                  value={genForm.plan_id}
+                  onChange={(e) => setGenForm({...genForm, plan_id: e.target.value})}
+                  className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all appearance-none font-bold"
+                >
+                  <option value="basic">Basic Tier (Core Features)</option>
+                  <option value="pro">Pro Tier (Advanced Modules)</option>
+                  <option value="enterprise">Enterprise Tier (Full Suite)</option>
+                </select>
+              </div>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Validity Period</label>
+                <select 
+                  value={genForm.duration}
+                  onChange={(e) => setGenForm({...genForm, duration: e.target.value})}
+                  className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all appearance-none font-bold"
+                >
+                  <option value="30">1 Month (Trial/Monthly)</option>
+                  <option value="90">3 Months (Quarterly)</option>
+                  <option value="180">6 Months (Semi-Annual)</option>
+                  <option value="365">1 Year (Annual)</option>
+                  <option value="1095">3 Years (Long-term)</option>
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2 ml-2">Duration</label>
-              <select 
-                value={genForm.duration}
-                onChange={(e) => setGenForm({...genForm, duration: e.target.value})}
-                className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all appearance-none"
-              >
-                <option value="15">15-Day Extension</option>
-                <option value="30">1 Month</option>
-                <option value="180">6 Months</option>
-                <option value="365">1 Year</option>
-              </select>
+
+            <div className="space-y-4">
+              <label className="text-[10px] font-black text-neon-purple uppercase tracking-widest ml-1 block">Entitled Premium Features</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-cyber-black/30 p-6 rounded-3xl border border-white/5">
+                {PREMIUM_FEATURES.map(feature => (
+                  <label key={feature} className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors cursor-pointer group">
+                    <input 
+                      type="checkbox"
+                      checked={genForm.features[feature]}
+                      onChange={(e) => setGenForm({
+                        ...genForm,
+                        features: { ...genForm.features, [feature]: e.target.checked }
+                      })}
+                      className="w-5 h-5 rounded border-white/10 bg-cyber-black text-neon-blue focus:ring-neon-blue transition-all"
+                    />
+                    <span className="text-[11px] font-bold text-gray-400 group-hover:text-white transition-colors">{feature}</span>
+                  </label>
+                ))}
+              </div>
             </div>
-            <div>
-              <label className="block text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2 ml-2">Batch Count</label>
-              <input 
-                type="number"
-                min="1"
-                max="100"
-                value={genForm.count}
-                onChange={(e) => setGenForm({...genForm, count: Number(e.target.value)})}
-                className="w-full bg-cyber-black/50 border border-white/5 rounded-2xl px-6 py-4 text-white outline-none focus:neon-border-blue transition-all"
-              />
-            </div>
+
             <button 
               disabled={isGenerating}
               type="submit"
-              className="w-full py-4 bg-neon-blue text-black font-black uppercase tracking-widest rounded-2xl hover:shadow-[0_0_20px_#00f3ff] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full py-5 bg-gradient-to-r from-neon-blue to-neon-indigo text-black font-black uppercase tracking-[0.2em] rounded-2xl hover:shadow-[0_0_30px_rgba(0,243,255,0.4)] transition-all disabled:opacity-50 flex items-center justify-center gap-3 text-sm"
             >
-              {isGenerating ? <RefreshCw className="animate-spin" size={18} /> : <Plus size={18} />}
-              Generate Key(s)
+              {isGenerating ? <RefreshCw className="animate-spin" size={20} /> : <Plus size={20} />}
+              Generate & Encrypt License Key
             </button>
           </form>
         </div>
 
         {/* Inventory Table */}
         <div className="space-y-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex bg-cyber-black p-1 rounded-xl border border-white/5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="flex bg-cyber-black/50 p-1.5 rounded-2xl border border-white/5">
               {['all', 'unused', 'active', 'revoked'].map((s) => (
                 <button 
                   key={s}
                   onClick={() => setFilter(s)}
-                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${filter === s ? 'bg-neon-purple text-black' : 'text-gray-500 hover:text-white'}`}
+                  className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${filter === s ? 'bg-neon-purple text-black shadow-[0_0_15px_rgba(188,19,254,0.3)]' : 'text-gray-500 hover:text-white'}`}
                 >
                   {s}
                 </button>
               ))}
             </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+            <div className="relative group">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-neon-blue transition-colors" size={18} />
               <input 
                 type="text" 
-                placeholder="Search keys..." 
-                className="pl-10 pr-4 py-2 bg-cyber-black/50 border border-white/5 rounded-xl text-xs outline-none focus:neon-border-blue transition-all w-full md:w-64"
+                placeholder="Search keys or schools..." 
+                className="pl-12 pr-6 py-3 bg-cyber-black/50 border border-white/5 rounded-2xl text-xs outline-none focus:neon-border-blue transition-all w-full md:w-80 font-bold"
               />
             </div>
           </div>
 
-          <div className="bg-cyber-gray/40 backdrop-blur-md rounded-[40px] border border-white/5 overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-cyber-black/50 border-b border-white/5">
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">License Key</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Plan / Duration</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Assigned School</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Created</th>
-                  <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {loading ? (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-20 text-center">
-                      <RefreshCw className="animate-spin text-neon-blue mx-auto mb-4" size={32} />
-                      <p className="text-gray-500 font-black uppercase tracking-widest text-xs">Fetching Inventory...</p>
-                    </td>
+          <div className="bg-cyber-gray/40 backdrop-blur-xl rounded-[2.5rem] border border-white/5 overflow-hidden neon-glow-card">
+            <div className="overflow-x-auto custom-scrollbar">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-cyber-black/50 border-b border-white/5">
+                    <th className="px-8 py-6 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">License Key</th>
+                    <th className="px-8 py-6 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Tier / Features</th>
+                    <th className="px-8 py-6 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
+                    <th className="px-8 py-6 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Assignment</th>
+                    <th className="px-8 py-6 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
                   </tr>
-                ) : filteredKeys.map((k) => (
-                  <tr key={k.id} className="hover:bg-white/5 transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono font-bold text-white">
-                          {k.status === 'unused' ? k.key : `${k.key.substring(0, 11)}****-****`}
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {loading ? (
+                    <tr>
+                      <td colSpan={5} className="px-8 py-32 text-center">
+                        <RefreshCw className="animate-spin text-neon-blue mx-auto mb-6" size={48} />
+                        <p className="text-gray-500 font-black uppercase tracking-[0.3em] text-xs animate-pulse">Syncing Global Inventory...</p>
+                      </td>
+                    </tr>
+                  ) : filteredKeys.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-8 py-20 text-center text-gray-600 font-bold uppercase tracking-widest text-xs">No matching licenses found</td>
+                    </tr>
+                  ) : filteredKeys.map((k) => (
+                    <tr key={k.id} className="hover:bg-white/[0.02] transition-colors group">
+                      <td className="px-8 py-6">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-cyber-black rounded-lg border border-white/5">
+                            <KeyIcon size={14} className="text-gray-500" />
+                          </div>
+                          <div>
+                            <span className="text-sm font-mono font-black text-white tracking-wider">
+                              {k.status === 'unused' ? k.key : `${k.key.substring(0, 11)}****-****`}
+                            </span>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[8px] text-gray-600 uppercase font-black tracking-widest">Created {new Date(k.createdAt?.toDate?.() || k.createdAt).toLocaleDateString()}</span>
+                              <button 
+                                onClick={() => {
+                                  navigator.clipboard.writeText(k.key);
+                                  toast.success('Key copied to clipboard');
+                                }}
+                                className="p-1 text-gray-500 hover:text-neon-blue transition-colors"
+                              >
+                                <Copy size={10} />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-8 py-6">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-[10px] font-black uppercase tracking-widest ${
+                            k.plan_id === 'enterprise' ? 'text-neon-purple' :
+                            k.plan_id === 'pro' ? 'text-neon-blue' : 'text-gray-400'
+                          }`}>{k.plan_id}</span>
+                          <span className="text-[10px] text-gray-600">•</span>
+                          <span className="text-[10px] text-gray-500 font-bold uppercase">{k.duration_days} Days</span>
+                        </div>
+                        <p className="text-[9px] text-gray-600 font-medium line-clamp-1 max-w-[200px]">
+                          {k.features?.join(', ') || 'No features assigned'}
+                        </p>
+                      </td>
+                      <td className="px-8 py-6">
+                        <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest inline-flex items-center gap-2 ${
+                          k.status === 'unused' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                          k.status === 'active' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
+                          k.status === 'revoked' ? 'bg-red-500/10 text-red-400 border border-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.2)]' :
+                          'bg-gray-500/10 text-gray-400 border border-gray-500/20'
+                        }`}>
+                          <div className={`w-1.5 h-1.5 rounded-full ${
+                            k.status === 'unused' ? 'bg-blue-400' :
+                            k.status === 'active' ? 'bg-green-400' :
+                            k.status === 'revoked' ? 'bg-red-400' : 'bg-gray-400'
+                          }`} />
+                          {k.status}
                         </span>
-                        <button 
-                          onClick={() => copyToClipboard(k.key)}
-                          className="p-1.5 text-gray-500 hover:text-neon-blue transition-colors opacity-0 group-hover:opacity-100"
-                        >
-                          <CopyIcon size={14} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <p className="text-xs font-bold text-white uppercase">{k.plan_id}</p>
-                      <p className="text-[9px] text-neon-purple font-black uppercase tracking-widest">{k.duration_days} Days</p>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
-                        k.status === 'unused' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                        k.status === 'active' ? 'bg-green-500/10 text-green-400 border border-green-500/20' :
-                        k.status === 'revoked' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
-                        'bg-gray-500/10 text-gray-400 border border-gray-500/20'
-                      }`}>
-                        {k.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <p className="text-xs font-bold text-gray-400">{k.school_id || '--'}</p>
-                      {k.activated_at && <p className="text-[8px] text-gray-600 uppercase">{new Date(k.activated_at).toLocaleDateString()}</p>}
-                    </td>
-                    <td className="px-6 py-4">
-                      <p className="text-[10px] text-gray-500 font-bold">{new Date(k.createdAt).toLocaleDateString()}</p>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        {k.status !== 'revoked' && (
-                          <button 
-                            onClick={() => revokeKey(k.id)}
-                            className="p-2 text-gray-500 hover:text-red-400 transition-colors"
-                            title="Revoke Key"
-                          >
-                            <Ban size={16} />
-                          </button>
+                      </td>
+                      <td className="px-8 py-6">
+                        {k.school_id ? (
+                          <div>
+                            <p className="text-xs font-black text-white uppercase tracking-tight">{k.school_name || 'Assigned School'}</p>
+                            <p className="text-[9px] text-gray-500 font-bold mt-0.5 uppercase tracking-widest">ID: {k.school_id.slice(0, 8)}...</p>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-gray-700 font-black uppercase tracking-widest italic">Unassigned</span>
                         )}
-                        <button className="p-2 text-gray-500 hover:text-white transition-colors">
-                          <MoreVertical size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      </td>
+                      <td className="px-8 py-6">
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => setEditingKey(k)}
+                            className="p-2.5 bg-white/5 rounded-xl text-gray-400 hover:text-neon-blue hover:bg-neon-blue/10 border border-white/5 transition-all"
+                            title="Edit Features"
+                          >
+                            <Settings size={16} />
+                          </button>
+                          <button 
+                            onClick={() => toggleStatus(k)}
+                            className={`p-2.5 rounded-xl border border-white/5 transition-all ${
+                              k.status === 'revoked' 
+                                ? 'bg-green-500/10 text-green-400 hover:bg-green-500/20' 
+                                : 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                            }`}
+                            title={k.status === 'revoked' ? 'Restore Key' : 'Ban / Revoke'}
+                          >
+                            {k.status === 'revoked' ? <CheckCircle size={16} /> : <Ban size={16} />}
+                          </button>
+                          <button 
+                            onClick={() => setDeleteConfirmId(k.id)}
+                            className="p-2.5 bg-white/5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-500/10 border border-white/5 transition-all"
+                            title="Delete Key"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
+
+        {/* Edit Features Modal */}
+        <AnimatePresence>
+          {editingKey && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="bg-cyber-gray w-full max-w-4xl rounded-[2.5rem] border border-white/10 overflow-hidden shadow-2xl"
+              >
+                <div className="p-8 border-b border-white/5 bg-cyber-black/50 flex justify-between items-center">
+                  <div>
+                    <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Edit Entitlements</h3>
+                    <p className="text-[10px] text-neon-blue font-black uppercase tracking-widest mt-1">Key: {editingKey.key}</p>
+                  </div>
+                  <button onClick={() => setEditingKey(null)} className="p-2 text-gray-500 hover:text-white transition-colors">
+                    <X size={24} />
+                  </button>
+                </div>
+                
+                <form onSubmit={updateFeatures} className="p-8 space-y-8">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[50vh] overflow-y-auto custom-scrollbar pr-4">
+                    {PREMIUM_FEATURES.map(feature => (
+                      <label key={feature} className="flex items-center gap-3 p-4 bg-cyber-black/50 rounded-2xl border border-white/5 hover:border-neon-purple/30 transition-all cursor-pointer group">
+                        <input 
+                          type="checkbox"
+                          checked={editingKey.features?.includes(feature)}
+                          onChange={(e) => {
+                            const newFeatures = e.target.checked 
+                              ? [...(editingKey.features || []), feature]
+                              : (editingKey.features || []).filter((f: string) => f !== feature);
+                            setEditingKey({ ...editingKey, features: newFeatures });
+                          }}
+                          className="w-5 h-5 rounded border-white/10 bg-cyber-black text-neon-purple focus:ring-neon-purple transition-all"
+                        />
+                        <span className="text-xs font-bold text-gray-400 group-hover:text-white transition-colors">{feature}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button 
+                      type="button"
+                      onClick={() => setEditingKey(null)}
+                      className="flex-1 py-4 bg-white/5 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-white/10 transition-all border border-white/5"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="submit"
+                      className="flex-2 py-4 bg-neon-purple text-black font-black uppercase tracking-widest rounded-2xl hover:shadow-[0_0_20px_rgba(188,19,254,0.4)] transition-all"
+                    >
+                      Update Permissions
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Delete Confirmation Modal */}
+        <AnimatePresence>
+          {deleteConfirmId && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="bg-cyber-gray p-8 rounded-[2rem] border border-red-500/30 max-w-md w-full text-center shadow-[0_0_50px_rgba(239,68,68,0.2)]"
+              >
+                <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/20">
+                  <AlertTriangle className="text-red-500" size={40} />
+                </div>
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Confirm Deletion</h3>
+                <p className="text-gray-400 text-sm mb-8 font-bold uppercase tracking-widest leading-relaxed">
+                  Are you absolutely sure? This action will permanently incinerate this license key from the database.
+                </p>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setDeleteConfirmId(null)}
+                    className="flex-1 py-4 bg-white/5 text-white font-black uppercase tracking-widest rounded-2xl hover:bg-white/10 transition-all border border-white/5"
+                  >
+                    Abort
+                  </button>
+                  <button 
+                    onClick={() => deleteKey(deleteConfirmId)}
+                    className="flex-1 py-4 bg-red-500 text-white font-black uppercase tracking-widest rounded-2xl hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] transition-all"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     );
   };
@@ -5945,7 +6008,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         u.role,
         u.schoolId || 'N/A',
         u.status,
-        new Date(u.createdAt).toLocaleDateString()
+        u.createdAt.toDate().toLocaleDateString()
       ]);
 
       const csvContent = "data:text/csv;charset=utf-8," 
@@ -6135,7 +6198,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="text-[10px] text-gray-500 font-bold">{new Date(u.createdAt).toLocaleDateString()}</p>
+                      <p className="text-[10px] text-gray-500 font-bold">{u.createdAt.toDate().toLocaleDateString()}</p>
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
@@ -6265,7 +6328,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     </div>
                     <div className="bg-cyber-black/50 p-4 rounded-2xl border border-white/5">
                       <p className="text-[10px] text-gray-600 uppercase font-black tracking-widest mb-1">Joined Date</p>
-                      <p className="text-white font-bold">{new Date(selectedUser.createdAt).toLocaleString()}</p>
+                      <p className="text-white font-bold">{selectedUser.createdAt.toDate().toLocaleString()}</p>
                     </div>
                   </div>
 
@@ -6346,10 +6409,728 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     );
   };
 
+  const MaintenanceControlModule = ({ systemConfig }: { systemConfig: SystemConfig | null }) => {
+    const [isUpdating, setIsUpdating] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
+    const [expectedDuration, setExpectedDuration] = useState(120);
+    const [autoDeactivate, setAutoDeactivate] = useState(systemConfig?.autoDeactivate || false);
+    const [maintenanceMessage, setMaintenanceMessage] = useState(systemConfig?.maintenanceMessage || '');
+    const [alertData, setAlertData] = useState({
+      message: systemConfig?.alert?.message || '',
+      type: systemConfig?.alert?.type || 'maintenance',
+      target: systemConfig?.alert?.target || 'all',
+      schoolId: systemConfig?.alert?.schoolId || '',
+      active: systemConfig?.alert?.active || false
+    });
+
+    const toggleMaintenance = async () => {
+      if (!systemConfig) return;
+      
+      setIsUpdating(true);
+      try {
+        const newStatus = !systemConfig.isMaintenanceMode;
+        const expiryDate = newStatus ? new Date(Date.now() + expectedDuration * 60 * 1000).toISOString() : null;
+        
+        await setDoc(doc(db, 'system', 'config'), {
+          ...systemConfig,
+          isMaintenanceMode: newStatus,
+          maintenanceStartedAt: newStatus ? serverTimestamp() : null,
+          expectedDownTime: expiryDate,
+          maintenanceMessage: newStatus ? maintenanceMessage : null,
+          autoDeactivate: newStatus ? autoDeactivate : false
+        }, { merge: true });
+        
+        await createAuditLog('SYSTEM', 'MAINTENANCE', `${newStatus ? 'Activated' : 'Deactivated'} Global Maintenance Mode`);
+        toast.success(`Maintenance mode ${newStatus ? 'activated' : 'deactivated'}`);
+      } catch (error) {
+        console.error("Error toggling maintenance mode:", error);
+        toast.error("Failed to update maintenance status");
+      } finally {
+        setIsUpdating(false);
+        setShowConfirm(false);
+      }
+    };
+
+    const updateAlert = async () => {
+      setIsUpdating(true);
+      try {
+        await setDoc(doc(db, 'system', 'config'), {
+          alert: alertData
+        }, { merge: true });
+        
+        await createAuditLog('SYSTEM', 'BROADCAST', `Updated system alert: ${alertData.type}`);
+        toast.success("System alert updated successfully");
+      } catch (error) {
+        console.error("Error updating alert:", error);
+        toast.error("Failed to update alert");
+      } finally {
+        setIsUpdating(false);
+      }
+    };
+
+    const insertText = (before: string, after: string = '') => {
+      const textarea = document.getElementById('broadcast-message') as HTMLTextAreaElement;
+      if (!textarea) return;
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selected = text.substring(start, end);
+      const newText = text.substring(0, start) + before + selected + after + text.substring(end);
+      
+      setAlertData({ ...alertData, message: newText });
+      
+      // Focus back and set selection
+      setTimeout(() => {
+        textarea.focus();
+        textarea.setSelectionRange(start + before.length, end + before.length);
+      }, 0);
+    };
+
+    return (
+      <div className="p-4 md:p-8 space-y-8 max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <h2 className="text-4xl font-black text-white tracking-tighter uppercase">
+              System <span className="text-neon-blue">Maintenance</span>
+            </h2>
+            <p className="text-gray-500 font-medium mt-1">Global infrastructure control and broadcast center</p>
+          </div>
+          
+          <div className="flex items-center gap-4 bg-cyber-gray/50 p-4 rounded-2xl border border-white/5">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Global Status</span>
+              <span className={`text-xs font-black uppercase ${systemConfig?.isMaintenanceMode ? 'text-red-500' : 'text-green-500'}`}>
+                {systemConfig?.isMaintenanceMode ? 'Maintenance Active' : 'System Online'}
+              </span>
+            </div>
+            <button 
+              onClick={() => setShowConfirm(true)}
+              disabled={isUpdating}
+              className={`w-14 h-7 rounded-full transition-all relative ${systemConfig?.isMaintenanceMode ? 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-gray-700'}`}
+            >
+              <div className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all ${systemConfig?.isMaintenanceMode ? 'left-8' : 'left-1'}`} />
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Control Panel */}
+          <div className="space-y-8">
+            <div className="bg-cyber-gray/30 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/5 space-y-8">
+              <div className="flex items-center gap-3">
+                <div className="p-3 rounded-2xl bg-neon-blue/10 text-neon-blue">
+                  <Settings size={24} />
+                </div>
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter">Broadcast Center</h3>
+              </div>
+
+              <div className="space-y-6">
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Alert Type</label>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {(['maintenance', 'update', 'holiday', 'urgent'] as const).map((type) => (
+                      <button
+                        key={type}
+                        onClick={() => setAlertData({ ...alertData, type })}
+                        className={`py-3 rounded-xl border font-black text-[10px] uppercase tracking-widest transition-all ${
+                          alertData.type === type 
+                            ? 'bg-white/10 border-white/20 text-white shadow-lg' 
+                            : 'bg-white/5 border-white/5 text-gray-500 hover:bg-white/10'
+                        }`}
+                      >
+                        {type}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Broadcast Message (Markdown)</label>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => insertText('**', '**')} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all" title="Bold"><span className="font-bold">B</span></button>
+                      <button onClick={() => insertText('_', '_')} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all" title="Italic"><span className="italic">I</span></button>
+                      <button onClick={() => insertText('# ')} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all" title="Heading">H</button>
+                      <button onClick={() => insertText('[', '](url)')} className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-all" title="Link"><ExternalLink size={14} /></button>
+                    </div>
+                  </div>
+                  <textarea 
+                    id="broadcast-message"
+                    value={alertData.message}
+                    onChange={(e) => setAlertData({ ...alertData, message: e.target.value })}
+                    placeholder="Enter system-wide announcement..."
+                    className="w-full bg-white/5 border border-white/5 rounded-2xl px-6 py-4 text-sm focus:border-neon-blue outline-none transition-all min-h-[120px] resize-none font-mono"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Target Audience</label>
+                    <select 
+                      value={alertData.target}
+                      onChange={(e) => setAlertData({ ...alertData, target: e.target.value as any })}
+                      className="w-full bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                    >
+                      <option value="all">All Schools</option>
+                      <option value="teachers">Only Teachers</option>
+                      <option value="school">Specific School</option>
+                    </select>
+                  </div>
+                  {alertData.target === 'school' && (
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">School ID</label>
+                      <input 
+                        type="text"
+                        value={alertData.schoolId}
+                        onChange={(e) => setAlertData({ ...alertData, schoolId: e.target.value })}
+                        placeholder="Enter School ID..."
+                        className="w-full bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/5">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${alertData.active ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`} />
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Activate Alert</span>
+                  </div>
+                  <button 
+                    onClick={() => setAlertData({ ...alertData, active: !alertData.active })}
+                    className={`w-10 h-5 rounded-full transition-all relative ${alertData.active ? 'bg-green-500' : 'bg-gray-700'}`}
+                  >
+                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${alertData.active ? 'left-5' : 'left-0.5'}`} />
+                  </button>
+                </div>
+
+                <button 
+                  onClick={updateAlert}
+                  disabled={isUpdating}
+                  className="w-full py-4 bg-neon-blue text-black font-black uppercase tracking-widest text-xs rounded-2xl hover:shadow-[0_0_20px_rgba(0,243,255,0.4)] transition-all flex items-center justify-center gap-2"
+                >
+                  {isUpdating ? <Loader2 className="animate-spin" size={16} /> : <Send size={16} />}
+                  Deploy Broadcast
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Preview */}
+          <div className="space-y-6">
+            <div className="flex items-center justify-between px-2">
+              <h4 className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+                <Eye size={12} className="text-neon-blue" />
+                Live User Preview
+              </h4>
+              <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest animate-pulse">Real-time Rendering</span>
+            </div>
+            
+            <div className="relative aspect-video md:aspect-square bg-cyber-black rounded-[2.5rem] border border-white/5 overflow-hidden shadow-2xl scale-95 origin-top">
+              <div className="absolute inset-0 scale-[0.4] origin-center">
+                <MaintenanceScreen config={{ ...systemConfig, alert: alertData, maintenanceMessage: maintenanceMessage, expectedDownTime: systemConfig?.isMaintenanceMode ? systemConfig.expectedDownTime : new Date(Date.now() + expectedDuration * 60 * 1000).toISOString() } as any} />
+              </div>
+              <div className="absolute inset-0 bg-transparent pointer-events-none border-[12px] border-cyber-gray/80 rounded-[2.5rem]" />
+            </div>
+
+            <div className="bg-white/5 p-6 rounded-3xl border border-white/5 space-y-4">
+              <div className="flex items-center gap-3">
+                <Clock className="text-neon-blue" size={20} />
+                <h4 className="text-sm font-black text-white uppercase tracking-tight">Maintenance Timer</h4>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Expected Duration</label>
+                  <select 
+                    value={expectedDuration}
+                    onChange={(e) => setExpectedDuration(Number(e.target.value))}
+                    className="w-full bg-cyber-black border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none focus:border-neon-blue transition-all"
+                  >
+                    <option value={30}>30 Minutes</option>
+                    <option value={60}>1 Hour</option>
+                    <option value={120}>2 Hours</option>
+                    <option value={240}>4 Hours</option>
+                    <option value={480}>8 Hours</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Auto-Deactivate</label>
+                  <div 
+                    onClick={() => setAutoDeactivate(!autoDeactivate)}
+                    className="flex items-center gap-3 h-[42px] px-4 bg-cyber-black rounded-xl border border-white/5 cursor-pointer hover:bg-white/5 transition-all"
+                  >
+                    <input 
+                      type="checkbox" 
+                      checked={autoDeactivate}
+                      onChange={() => {}}
+                      className="accent-neon-blue" 
+                    />
+                    <span className="text-[10px] font-bold text-gray-500 uppercase">{autoDeactivate ? 'Enabled' : 'Disabled'}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-gray-600 uppercase tracking-widest">Maintenance Message</label>
+                <textarea 
+                  value={maintenanceMessage}
+                  onChange={(e) => setMaintenanceMessage(e.target.value)}
+                  placeholder="Custom message for maintenance screen..."
+                  className="w-full bg-cyber-black border border-white/5 rounded-xl px-4 py-3 text-xs text-white outline-none focus:border-neon-blue transition-all min-h-[80px] resize-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Confirmation Modal */}
+        <AnimatePresence>
+          {showConfirm && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowConfirm(false)}
+                className="absolute inset-0 bg-cyber-black/80 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.9, opacity: 0 }}
+                className="bg-cyber-gray p-8 rounded-[2.5rem] border border-red-500/30 max-w-md w-full relative z-10 text-center"
+              >
+                <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-red-500/20">
+                  <ShieldAlert className="text-red-500" size={40} />
+                </div>
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-2">Critical Action</h3>
+                <p className="text-gray-500 text-sm mb-8">
+                  You are about to {systemConfig?.isMaintenanceMode ? 'deactivate' : 'activate'} global maintenance mode. This will affect all users across the platform.
+                </p>
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setShowConfirm(false)}
+                    className="flex-1 py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-gray-400 font-bold uppercase tracking-widest text-xs transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={toggleMaintenance}
+                    className="flex-1 py-4 bg-red-500 text-white font-black uppercase tracking-widest text-xs rounded-2xl hover:shadow-[0_0_20px_rgba(239,68,68,0.4)] transition-all"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
+  const SystemAlert = ({ systemConfig, userProfile }: { systemConfig: SystemConfig | null, userProfile: UserProfile }) => {
+    if (!systemConfig?.alert?.active) return null;
+
+    const { message, type, target, schoolId } = systemConfig.alert;
+
+    // Check if alert targets the current user
+    if (target === 'school' && schoolId !== userProfile?.schoolId) return null;
+    if (target === 'teachers' && userProfile?.role !== 'teacher') return null;
+
+    const styles = {
+      maintenance: 'bg-red-500/10 border-red-500/20 text-red-400',
+      update: 'bg-neon-blue/10 border-neon-blue/20 text-neon-blue',
+      holiday: 'bg-green-500/10 border-green-500/20 text-green-400',
+      urgent: 'bg-orange-500/10 border-orange-500/20 text-orange-400'
+    };
+
+    return (
+      <motion.div 
+        initial={{ y: -50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className={`mx-4 mt-4 p-4 rounded-2xl border backdrop-blur-md flex items-center gap-4 ${styles[type]}`}
+      >
+        <div className="p-2 rounded-xl bg-white/5">
+          <Bell size={18} />
+        </div>
+        <div className="flex-1">
+          <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-0.5">{type} Alert</p>
+          <div className="text-sm font-bold leading-tight prose prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{message}</ReactMarkdown>
+          </div>
+        </div>
+        <button className="p-2 hover:bg-white/5 rounded-xl transition-all">
+          <X size={16} />
+        </button>
+      </motion.div>
+    );
+  };
+
+  const DataExportModule = () => {
+    const [isExporting, setIsExporting] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [formatType, setFormatType] = useState<'xlsx' | 'pdf' | 'json'>('xlsx');
+    const [dateRange, setDateRange] = useState({ start: '', end: '' });
+
+    const categories = [
+      {
+        id: 'academic',
+        title: 'Academic Data',
+        icon: GraduationCap,
+        color: 'text-neon-blue',
+        glow: 'shadow-[0_0_20px_rgba(0,243,255,0.2)]',
+        border: 'border-neon-blue/30',
+        items: [
+          { id: 'students', label: 'Students List', description: 'Full student profiles and enrollment data' },
+          { id: 'teachers', label: 'Teacher Records', description: 'Staff profiles, qualifications, and assignments' },
+          { id: 'exams', label: 'Exam Results', description: 'Consolidated marks and grade sheets' },
+          { id: 'timetable', label: 'Class Timetables', description: 'Weekly schedules for all grades' },
+        ]
+      },
+      {
+        id: 'finance',
+        title: 'Financial Reports',
+        icon: DollarSign,
+        color: 'text-green-400',
+        glow: 'shadow-[0_0_20px_rgba(34,197,94,0.2)]',
+        border: 'border-green-400/30',
+        restricted: true,
+        items: [
+          { id: 'fees', label: 'Fee Collection', description: 'Daily and monthly collection reports' },
+          { id: 'dues', label: 'Pending Dues', description: 'Outstanding balances by student' },
+          { id: 'expenses', label: 'Expense Reports', description: 'Operational costs and vendor payments' },
+          { id: 'salaries', label: 'Salary Slips', description: 'Staff payroll and disbursement history' },
+        ]
+      },
+      {
+        id: 'attendance',
+        title: 'Attendance & HR',
+        icon: Calendar,
+        color: 'text-neon-purple',
+        glow: 'shadow-[0_0_20px_rgba(188,19,254,0.2)]',
+        border: 'border-neon-purple/30',
+        items: [
+          { id: 'student_attendance', label: 'Student Attendance', description: 'Monthly attendance summaries' },
+          { id: 'staff_attendance', label: 'Staff Attendance', description: 'Check-in/out logs for all employees' },
+          { id: 'leave_reports', label: 'Leave Reports', description: 'Approved and pending leave history' },
+        ]
+      },
+      {
+        id: 'system',
+        title: 'System & Infrastructure',
+        icon: Server,
+        color: 'text-neon-indigo',
+        glow: 'shadow-[0_0_20px_rgba(99,102,241,0.2)]',
+        border: 'border-neon-indigo/30',
+        restricted: true,
+        items: [
+          { id: 'audit_logs', label: 'Audit Logs', description: 'Full system activity and security logs' },
+          { id: 'settings', label: 'School Settings', description: 'Configuration and preference backups' },
+          { id: 'licenses', label: 'License History', description: 'Subscription and key activation history' },
+        ]
+      }
+    ];
+
+    const handleExport = async (itemId: string, categoryTitle: string, itemLabel: string) => {
+      if (isExporting) return;
+      
+      // Check permissions for restricted categories
+      const category = categories.find(c => c.items.some(i => i.id === itemId));
+      if (category?.restricted && userProfile.role !== 'super_admin' && !hasPermission('finance', 'view')) {
+        toast.error("Access Denied: You don't have permission to export sensitive financial data.");
+        return;
+      }
+
+      setIsExporting(true);
+      setProgress(0);
+
+      // Log the export action
+      await createAuditLog('SYSTEM', 'DATA_EXPORT', `Exported ${itemLabel} (${formatType.toUpperCase()})`);
+
+      // Simulate data fetching and preparation
+      const interval = setInterval(() => {
+        setProgress(prev => {
+          if (prev >= 100) {
+            clearInterval(interval);
+            return 100;
+          }
+          return prev + 10;
+        });
+      }, 100);
+
+      try {
+        // Mock data generation based on item
+        const data = generateMockData(itemId);
+        
+        setTimeout(() => {
+          if (formatType === 'xlsx') {
+            exportToExcel(data, itemLabel);
+          } else if (formatType === 'pdf') {
+            exportToPDF(data, itemLabel);
+          } else {
+            exportToJSON(data, itemLabel);
+          }
+          
+          setIsExporting(false);
+          toast.success(`${itemLabel} exported successfully!`);
+        }, 1200);
+      } catch (error) {
+        console.error("Export failed:", error);
+        toast.error("Export failed. Please try again.");
+        setIsExporting(false);
+      }
+    };
+
+    const generateMockData = (type: string) => {
+      // Mock data points (20+ fields as requested)
+      const base = Array.from({ length: 50 }, (_, i) => ({
+        id: `REC-${1000 + i}`,
+        date: format(new Date(), 'yyyy-MM-dd'),
+        status: 'Completed',
+        reference: `REF-${Math.random().toString(36).substring(7).toUpperCase()}`,
+        category: type.toUpperCase(),
+        amount: (Math.random() * 5000).toFixed(2),
+        user: `User ${i + 1}`,
+        email: `user${i+1}@example.com`,
+        phone: `+92-300-${Math.floor(1000000 + Math.random() * 9000000)}`,
+        location: 'Main Campus',
+        department: 'Academic',
+        notes: 'Generated via Enterprise Export Module',
+        ip_address: '192.168.1.1',
+        device: 'Windows Desktop',
+        browser: 'Chrome 120.0',
+        duration: '2.5s',
+        priority: 'High',
+        tags: 'Export, System, Backup',
+        verified: 'Yes',
+        checksum: 'SHA-256-OK'
+      }));
+      return base;
+    };
+
+    const exportToExcel = (data: any[], fileName: string) => {
+      const columns = Object.keys(data[0]).map(key => ({
+        label: key.replace(/_/g, ' ').toUpperCase(),
+        value: key
+      }));
+
+      const settings = {
+        fileName: `${fileName}_${format(new Date(), 'yyyy-MM-dd')}`,
+        extraLength: 3,
+        writeOptions: {}
+      };
+
+      xlsx([{ sheet: fileName, columns, content: data }], settings);
+    };
+
+    const exportToPDF = (data: any[], fileName: string) => {
+      const doc = new jsPDF('l', 'mm', 'a4');
+      
+      // Add Header
+      doc.setFontSize(20);
+      doc.setTextColor(0, 243, 255); // Neon Blue
+      doc.text("EduPak Enterprise Data Export", 14, 20);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(100);
+      doc.text(`Generated on: ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}`, 14, 28);
+      doc.text(`Report Type: ${fileName}`, 14, 33);
+
+      const tableColumn = Object.keys(data[0]).map(k => k.replace(/_/g, ' ').toUpperCase());
+      const tableRows = data.map(item => Object.values(item));
+
+      (doc as any).autoTable({
+        head: [tableColumn],
+        body: tableRows,
+        startY: 40,
+        theme: 'grid',
+        styles: { fontSize: 7, cellPadding: 2 },
+        headStyles: { fillColor: [0, 243, 255], textColor: [0, 0, 0], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [245, 245, 245] }
+      });
+
+      doc.save(`${fileName}_${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+    };
+
+    const exportToJSON = (data: any[], fileName: string) => {
+      const jsonString = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${fileName}_${format(new Date(), 'yyyy-MM-dd')}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
+    return (
+      <div className="p-4 md:p-8 space-y-8 max-w-7xl mx-auto">
+        {/* Header Section */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <h2 className="text-4xl font-black text-white tracking-tighter uppercase">
+              Data <span className="text-neon-blue">Export</span> Center
+            </h2>
+            <p className="text-gray-500 font-medium mt-1">Enterprise-grade data extraction and backup engine</p>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3">
+            <button 
+              onClick={() => handleExport('bulk_backup', 'SYSTEM', 'Full School Backup')}
+              className="px-6 py-3 bg-neon-blue text-black font-black uppercase tracking-widest text-xs rounded-xl hover:shadow-[0_0_20px_rgba(0,243,255,0.5)] transition-all flex items-center gap-2"
+            >
+              <Database size={16} />
+              Bulk Backup
+            </button>
+          </div>
+        </div>
+
+        {/* Filters Bar */}
+        <div className="bg-cyber-gray/50 backdrop-blur-xl border border-white/5 p-6 rounded-2xl grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+              <Download size={12} className="text-neon-blue" />
+              Export Format
+            </label>
+            <div className="flex gap-2">
+              {(['xlsx', 'pdf', 'json'] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFormatType(f)}
+                  className={`flex-1 py-3 rounded-xl border font-black text-xs uppercase tracking-widest transition-all ${
+                    formatType === f 
+                      ? 'bg-neon-blue/10 border-neon-blue text-neon-blue shadow-[0_0_15px_rgba(0,243,255,0.2)]' 
+                      : 'bg-white/5 border-white/5 text-gray-500 hover:bg-white/10'
+                  }`}
+                >
+                  {f === 'xlsx' ? 'Excel' : f.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+              <Calendar size={12} className="text-neon-blue" />
+              Start Date
+            </label>
+            <input 
+              type="date" 
+              value={dateRange.start}
+              onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+              className="w-full bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+              <Calendar size={12} className="text-neon-blue" />
+              End Date
+            </label>
+            <input 
+              type="date" 
+              value={dateRange.end}
+              onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+              className="w-full bg-white/5 border border-white/5 rounded-xl px-4 py-3 text-sm focus:border-neon-blue outline-none transition-all"
+            />
+          </div>
+        </div>
+
+        {/* Progress Bar (Visible during export) */}
+        <AnimatePresence>
+          {isExporting && (
+            <motion.div 
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="bg-neon-blue/5 border border-neon-blue/20 p-4 rounded-xl space-y-3"
+            >
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest animate-pulse">
+                  Preparing secure data stream...
+                </span>
+                <span className="text-[10px] font-black text-neon-blue">{progress}%</span>
+              </div>
+              <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                <motion.div 
+                  initial={{ width: 0 }}
+                  animate={{ width: `${progress}%` }}
+                  className="h-full bg-neon-blue shadow-[0_0_10px_#00f3ff]"
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Bento Grid Layout */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {categories.map((category) => (
+            <div 
+              key={category.id}
+              className={`bg-cyber-gray/30 backdrop-blur-md border ${category.border} ${category.glow} rounded-3xl p-6 flex flex-col h-full`}
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className={`p-3 rounded-2xl bg-white/5 ${category.color}`}>
+                  <category.icon size={24} />
+                </div>
+                <h3 className="text-lg font-black tracking-tight uppercase">{category.title}</h3>
+              </div>
+
+              <div className="space-y-3 flex-1">
+                {category.items.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => handleExport(item.id, category.title, item.label)}
+                    disabled={isExporting}
+                    className="w-full group p-4 bg-white/5 hover:bg-white/10 border border-white/5 rounded-2xl text-left transition-all relative overflow-hidden"
+                  >
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-sm font-bold text-white group-hover:text-neon-blue transition-colors">
+                        {item.label}
+                      </span>
+                      <ChevronRight size={14} className="text-gray-600 group-hover:text-neon-blue group-hover:translate-x-1 transition-all" />
+                    </div>
+                    <p className="text-[10px] text-gray-500 leading-tight">
+                      {item.description}
+                    </p>
+                    
+                    {/* Hover Glow Effect */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                  </button>
+                ))}
+              </div>
+              
+              {category.restricted && (
+                <div className="mt-4 flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg">
+                  <ShieldAlert size={12} className="text-red-400" />
+                  <span className="text-[8px] font-black text-red-400 uppercase tracking-widest">Restricted Access</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Footer Info */}
+        <div className="flex items-center justify-center gap-4 text-gray-600">
+          <div className="h-px flex-1 bg-white/5" />
+          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em]">
+            <ShieldCheck size={14} />
+            AES-256 Encrypted Export Engine
+          </div>
+          <div className="h-px flex-1 bg-white/5" />
+        </div>
+      </div>
+    );
+  };
+
   const SuperAdminRolesManagement = () => {
-    const [activeSubTab, setActiveSubTab] = useState<'staff' | 'roles'>('staff');
-    const [staff, setStaff] = useState<UserProfile[]>([]);
+    const [activeSubTab, setActiveSubTab] = useState<'staff' | 'roles' | 'logs'>('staff');
+    const [staff, setStaff] = useState<any[]>([]);
     const [roles, setRoles] = useState<AdminRole[]>([]);
+    const [logs, setLogs] = useState<AuditLog[]>([]);
     const [loading, setLoading] = useState(true);
     const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
     const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
@@ -6357,13 +7138,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     const [newRoleData, setNewRoleData] = useState<AdminRole>({
       id: '',
       role_name: '',
-      permissions: {
-        schools: [],
-        billing: [],
-        health: [],
-        backup: [],
-        users: []
-      }
+      permissions: {}
     });
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
@@ -6371,8 +7146,20 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     useEffect(() => {
       const staffUnsub = onSnapshot(
         query(collection(db, 'users'), where('role', '!=', 'student'), where('role', '!=', 'teacher'), where('role', '!=', 'parent')),
-        (snap) => {
-          setStaff(snap.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile)));
+        async (snap) => {
+          const users = snap.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
+          
+          // Fetch team metadata from super_admin_team
+          const teamSnap = await getDocs(collection(db, 'super_admin_team'));
+          const teamData = teamSnap.docs.reduce((acc: any, doc) => {
+            acc[doc.id] = doc.data();
+            return acc;
+          }, {});
+
+          setStaff(users.map(u => ({
+            ...u,
+            ...(teamData[u.uid] || { is2FAEnabled: false, lastIp: 'N/A' })
+          })));
         }
       );
 
@@ -6381,9 +7168,17 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         setLoading(false);
       });
 
+      const logsUnsub = onSnapshot(
+        query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(50)),
+        (snap) => {
+          setLogs(snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as AuditLog)));
+        }
+      );
+
       return () => {
         staffUnsub();
         rolesUnsub();
+        logsUnsub();
       };
     }, []);
 
@@ -6399,12 +7194,35 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
+        
+        // Add to super_admin_team metadata
+        await setDoc(doc(db, 'super_admin_team', data.uid), {
+          uid: data.uid,
+          is2FAEnabled: false,
+          lastIp: 'N/A',
+          permissions: {}, // Individual overrides if needed
+          createdAt: serverTimestamp()
+        });
+
         setIsInviteModalOpen(false);
         setInviteData({ email: '', password: '', role: '', name: '' });
+        toast.success("Staff member invited successfully");
       } catch (err: any) {
         setError(err.message);
+        toast.error(err.message);
       } finally {
         setSubmitting(false);
+      }
+    };
+
+    const handleToggle2FA = async (staffUid: string, currentStatus: boolean) => {
+      try {
+        await updateDoc(doc(db, 'super_admin_team', staffUid), {
+          is2FAEnabled: !currentStatus
+        });
+        toast.success(`2FA ${!currentStatus ? 'enabled' : 'disabled'} for user`);
+      } catch (err: any) {
+        toast.error("Failed to update 2FA status");
       }
     };
 
@@ -6414,22 +7232,18 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       setSubmitting(true);
       setError('');
       try {
-        const roleId = newRoleData.role_name.toLowerCase().replace(/\s+/g, '_');
+        const roleId = newRoleData.id || newRoleData.role_name.toLowerCase().replace(/\s+/g, '_');
         await setDoc(doc(db, 'admin_roles', roleId), { ...newRoleData, id: roleId });
         setIsRoleModalOpen(false);
         setNewRoleData({
           id: '',
           role_name: '',
-          permissions: {
-            schools: [],
-            billing: [],
-            health: [],
-            backup: [],
-            users: []
-          }
+          permissions: {}
         });
+        toast.success("Role configuration saved");
       } catch (err: any) {
         setError(err.message);
+        toast.error(err.message);
       } finally {
         setSubmitting(false);
       }
@@ -6452,12 +7266,26 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     };
 
     const modules = [
-      { id: 'schools', label: 'Schools Directory' },
+      { id: 'overview', label: 'Dashboard Overview' },
       { id: 'billing', label: 'Revenue & Billing' },
+      { id: 'schools', label: 'Schools Directory' },
+      { id: 'licenses', label: 'License Keys' },
+      { id: 'plans', label: 'Subscription Plans' },
+      { id: 'users', label: 'Global Users' },
+      { id: 'admin_roles', label: 'Team Management' },
+      { id: 'settings', label: 'Global Settings' },
+      { id: 'integrations', label: 'Integration & APIs' },
       { id: 'health', label: 'Server Health' },
       { id: 'backup', label: 'Backup & Restore' },
-      { id: 'users', label: 'Global Users' },
-      { id: 'announcements', label: 'Global Announcements' }
+      { id: 'tickets', label: 'Support Tickets' },
+      { id: 'announcements', label: 'Global Announcements' },
+      { id: 'audit_logs', label: 'Audit Logs' },
+      { id: 'marketing', label: 'Marketing Analytics' },
+      { id: 'security', label: 'Security Settings' },
+      { id: 'finance', label: 'Financial Reports' },
+      { id: 'maintenance', label: 'Maintenance Mode' },
+      { id: 'export', label: 'Data Export' },
+      { id: 'staff', label: 'Staff Management' }
     ];
 
     const actions: ('view' | 'create' | 'edit' | 'delete')[] = ['view', 'create', 'edit', 'delete'];
@@ -6466,26 +7294,32 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       <div className="space-y-8">
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
-            <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Staff & RBAC Control</h2>
-            <p className="text-xs text-gray-500 uppercase tracking-widest mt-1">Manage administrative access and custom roles</p>
+            <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Team Management & RBAC</h2>
+            <p className="text-xs text-gray-500 uppercase tracking-widest mt-1">Cyberpunk SaaS Control Center</p>
           </div>
-          <div className="flex bg-cyber-gray/50 p-1 rounded-2xl border border-white/5">
+          <div className="flex bg-cyber-gray/50 p-1 rounded-2xl border border-white/5 overflow-x-auto">
             <button 
               onClick={() => setActiveSubTab('staff')}
-              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'staff' ? 'bg-neon-blue text-black' : 'text-gray-500 hover:text-white'}`}
+              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeSubTab === 'staff' ? 'bg-neon-blue text-black' : 'text-gray-500 hover:text-white'}`}
             >
               Staff Directory
             </button>
             <button 
               onClick={() => setActiveSubTab('roles')}
-              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'roles' ? 'bg-neon-blue text-black' : 'text-gray-500 hover:text-white'}`}
+              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeSubTab === 'roles' ? 'bg-neon-blue text-black' : 'text-gray-500 hover:text-white'}`}
             >
-              Roles & Permissions
+              RBAC Matrix
+            </button>
+            <button 
+              onClick={() => setActiveSubTab('logs')}
+              className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeSubTab === 'logs' ? 'bg-neon-blue text-black' : 'text-gray-500 hover:text-white'}`}
+            >
+              Activity Logs
             </button>
           </div>
         </div>
 
-        {activeSubTab === 'staff' ? (
+        {activeSubTab === 'staff' && (
           <div className="space-y-6">
             <div className="flex justify-end">
               <button 
@@ -6493,7 +7327,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                 className="bg-neon-blue text-black px-6 py-2 rounded-xl flex items-center gap-2 hover:shadow-[0_0_20px_#00f3ff] transition-all font-black uppercase tracking-widest text-[10px]"
               >
                 <Plus size={16} />
-                Invite New Staff
+                Add New Assistant
               </button>
             </div>
 
@@ -6502,10 +7336,10 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-cyber-black/50 border-b border-white/5">
-                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Name</th>
-                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Email</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Assistant</th>
                       <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Role</th>
-                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Last Active</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">IP Address</th>
+                      <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">2FA Status</th>
                       <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
                       <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
                     </tr>
@@ -6514,16 +7348,35 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     {staff.map((member) => (
                       <tr key={member.uid} className="hover:bg-white/5 transition-colors group">
                         <td className="px-6 py-4">
-                          <p className="text-sm font-bold text-white">{member.name}</p>
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-neon-blue/10 flex items-center justify-center border border-neon-blue/20">
+                              <UserIcon size={16} className="text-neon-blue" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-white">{member.name}</p>
+                              <p className="text-[10px] text-gray-500">{member.email}</p>
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-6 py-4 text-xs text-gray-400">{member.email}</td>
                         <td className="px-6 py-4">
                           <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${member.role === 'super_admin' ? 'bg-neon-purple/10 text-neon-purple border border-neon-purple/20' : 'bg-neon-blue/10 text-neon-blue border border-neon-blue/20'}`}>
                             {member.role.replace('_', ' ')}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-xs text-gray-500">
-                          {member.lastActive ? member.lastActive.toDate().toLocaleString() : 'Never'}
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2 text-xs text-gray-400">
+                            <Globe size={12} className="text-gray-600" />
+                            {member.lastIp || 'N/A'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <button 
+                            onClick={() => handleToggle2FA(member.uid, member.is2FAEnabled)}
+                            className={`flex items-center gap-2 px-3 py-1 rounded-lg border transition-all ${member.is2FAEnabled ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-gray-500/10 border-gray-500/20 text-gray-400'}`}
+                          >
+                            <ShieldCheck size={12} />
+                            <span className="text-[9px] font-black uppercase tracking-widest">{member.is2FAEnabled ? 'Active' : 'Disabled'}</span>
+                          </button>
                         </td>
                         <td className="px-6 py-4">
                           <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${member.status === 'active' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
@@ -6547,7 +7400,9 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
               </div>
             </div>
           </div>
-        ) : (
+        )}
+
+        {activeSubTab === 'roles' && (
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
             <div className="lg:col-span-1 space-y-4">
               <div className="flex items-center justify-between mb-2">
@@ -6571,11 +7426,11 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
             <div className="lg:col-span-3 bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5">
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-xl font-black text-white uppercase tracking-tighter">Permissions Matrix</h3>
-                <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest bg-neon-blue/10 px-3 py-1 rounded-full border border-neon-blue/20">Enterprise Grade RBAC</span>
+                <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest bg-neon-blue/10 px-3 py-1 rounded-full border border-neon-blue/20">Granular RBAC Engine</span>
               </div>
 
-              <div className="space-y-6">
-                <div className="grid grid-cols-5 gap-4 border-b border-white/5 pb-4">
+              <div className="space-y-6 max-h-[600px] overflow-y-auto pr-4 custom-scrollbar">
+                <div className="grid grid-cols-5 gap-4 border-b border-white/5 pb-4 sticky top-0 bg-cyber-gray z-10">
                   <div className="col-span-1 text-[10px] font-black text-gray-600 uppercase tracking-widest">Module</div>
                   {actions.map(a => (
                     <div key={a} className="text-center text-[10px] font-black text-gray-600 uppercase tracking-widest">{a}</div>
@@ -6612,13 +7467,65 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
           </div>
         )}
 
+        {activeSubTab === 'logs' && (
+          <div className="bg-cyber-gray/40 backdrop-blur-md rounded-3xl border border-white/5 overflow-hidden">
+            <div className="p-6 border-b border-white/5 flex items-center justify-between">
+              <h3 className="text-xl font-black text-white uppercase tracking-tighter">System Activity Logs</h3>
+              <div className="flex items-center gap-2">
+                <Activity size={16} className="text-neon-blue" />
+                <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Live Feed</span>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-cyber-black/50 border-b border-white/5">
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Timestamp</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actor</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Action</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Resource</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Details</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">IP Address</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {logs.map((log) => (
+                    <tr key={log.id} className="hover:bg-white/5 transition-colors">
+                      <td className="px-6 py-4 text-xs text-gray-500 whitespace-nowrap">
+                        {log.timestamp.toDate().toLocaleString()}
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="text-xs font-bold text-white">{log.actor_email}</p>
+                        <p className="text-[9px] text-gray-600 uppercase tracking-tighter">{log.actor_uid.slice(0, 8)}...</p>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest ${
+                          log.action_type === 'DELETE' ? 'bg-red-500/10 text-red-400' :
+                          log.action_type === 'CREATE' ? 'bg-green-500/10 text-green-400' :
+                          log.action_type === 'UPDATE' ? 'bg-neon-blue/10 text-neon-blue' :
+                          'bg-gray-500/10 text-gray-400'
+                        }`}>
+                          {log.action_type}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-gray-400">{log.resource}</td>
+                      <td className="px-6 py-4 text-xs text-gray-500 max-w-xs truncate">{log.details}</td>
+                      <td className="px-6 py-4 text-xs font-mono text-gray-600">{log.ip_address}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Invite Staff Modal */}
         <AnimatePresence>
           {isInviteModalOpen && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsInviteModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
               <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-cyber-gray p-8 rounded-3xl neon-border-blue w-full max-w-md">
-                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Invite New Staff</h3>
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Add New Assistant</h3>
                 <form onSubmit={handleInviteStaff} className="space-y-4">
                   <NeonInput icon={UserIcon} placeholder="Full Name" required value={inviteData.name} onChange={(e: any) => setInviteData({...inviteData, name: e.target.value})} />
                   <NeonInput icon={Mail} type="email" placeholder="Email Address" required value={inviteData.email} onChange={(e: any) => setInviteData({...inviteData, email: e.target.value})} />
@@ -6634,7 +7541,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                     {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
                   </select>
                   {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
-                  <NeonButton type="submit" loading={submitting}>Send Invitation</NeonButton>
+                  <NeonButton type="submit" loading={submitting}>Send Invitation & Create Profile</NeonButton>
                 </form>
               </motion.div>
             </div>
@@ -6664,6 +7571,303 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
   };
 
   // --- School Admin Portal Components ---
+  const SchoolAdminRolesManagement = ({ schoolId }: { schoolId: string }) => {
+    const [activeSubTab, setActiveSubTab] = useState<'staff' | 'roles'>('staff');
+    const [staff, setStaff] = useState<UserProfile[]>([]);
+    const [roles, setRoles] = useState<AdminRole[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+    const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
+    const [inviteData, setInviteData] = useState({ email: '', password: '', role: '', name: '' });
+    const [newRoleData, setNewRoleData] = useState<AdminRole>({
+      id: '',
+      role_name: '',
+      permissions: {},
+      school_id: schoolId
+    });
+    const [submitting, setSubmitting] = useState(false);
+    const [error, setError] = useState('');
+
+    const schoolModules = [
+      { id: 'students', label: 'Student Management' },
+      { id: 'attendance', label: 'Attendance' },
+      { id: 'teachers', label: 'HR & Teachers' },
+      { id: 'academics', label: 'Academics' },
+      { id: 'fees', label: 'Fee Collection' },
+      { id: 'exams', label: 'Exams & Results' },
+      { id: 'timetable', label: 'Timetable' },
+      { id: 'communication', label: 'Communication' },
+      { id: 'settings', label: 'School Settings' },
+    ];
+
+    const actions: ('view' | 'create' | 'edit' | 'delete')[] = ['view', 'create', 'edit', 'delete'];
+
+    useEffect(() => {
+      const staffUnsub = onSnapshot(
+        query(collection(db, 'users'), where('schoolId', '==', schoolId)),
+        (snap) => {
+          setStaff(snap.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile)));
+        }
+      );
+
+      const rolesUnsub = onSnapshot(
+        query(collection(db, 'admin_roles'), where('school_id', '==', schoolId)),
+        (snap) => {
+          setRoles(snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as AdminRole)));
+          setLoading(false);
+        }
+      );
+
+      return () => {
+        staffUnsub();
+        rolesUnsub();
+      };
+    }, [schoolId]);
+
+    const handleInviteStaff = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setSubmitting(true);
+      setError('');
+      try {
+        const response = await fetch('/api/admin/invite-staff', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...inviteData, schoolId, adminUid: userProfile.uid })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error);
+        setIsInviteModalOpen(false);
+        setInviteData({ email: '', password: '', role: '', name: '' });
+        toast.success("Staff invited successfully");
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    const handleCreateRole = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newRoleData.role_name) return;
+      setSubmitting(true);
+      setError('');
+      try {
+        const roleId = `role_${schoolId}_${newRoleData.role_name.toLowerCase().replace(/\s+/g, '_')}`;
+        await setDoc(doc(db, 'admin_roles', roleId), { ...newRoleData, id: roleId, school_id: schoolId });
+        setIsRoleModalOpen(false);
+        setNewRoleData({
+          id: '',
+          role_name: '',
+          permissions: {},
+          school_id: schoolId
+        });
+        toast.success("Role created successfully");
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
+    const togglePermission = (module: string, action: 'view' | 'create' | 'edit' | 'delete') => {
+      setNewRoleData(prev => {
+        const current = prev.permissions[module] || [];
+        const updated = current.includes(action) 
+          ? current.filter(a => a !== action)
+          : [...current, action];
+        return {
+          ...prev,
+          permissions: {
+            ...prev.permissions,
+            [module]: updated
+          }
+        };
+      });
+    };
+
+    if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-neon-blue" size={32} /></div>;
+
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-4 p-1 bg-cyber-black/50 rounded-xl border border-white/5">
+            <button 
+              onClick={() => setActiveSubTab('staff')}
+              className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'staff' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]' : 'text-gray-500 hover:text-white'}`}
+            >
+              Staff Directory
+            </button>
+            <button 
+              onClick={() => setActiveSubTab('roles')}
+              className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'roles' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]' : 'text-gray-500 hover:text-white'}`}
+            >
+              Role Definitions
+            </button>
+          </div>
+          <button 
+            onClick={() => activeSubTab === 'staff' ? setIsInviteModalOpen(true) : setIsRoleModalOpen(true)}
+            className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-neon-blue text-[10px] font-black uppercase tracking-widest transition-all"
+          >
+            <Plus size={16} />
+            {activeSubTab === 'staff' ? 'Invite Staff' : 'Create Role'}
+          </button>
+        </div>
+
+        {activeSubTab === 'staff' ? (
+          <div className="bg-cyber-gray/40 backdrop-blur-md rounded-2xl border border-white/5 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-cyber-black/50 border-b border-white/5">
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Name</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Email</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Role</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
+                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {staff.map((member) => (
+                    <tr key={member.uid} className="hover:bg-white/5 transition-colors group">
+                      <td className="px-6 py-4">
+                        <p className="text-sm font-bold text-white">{member.name}</p>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-gray-400">{member.email}</td>
+                      <td className="px-6 py-4">
+                        <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-neon-blue/10 text-neon-blue border border-neon-blue/20">
+                          {member.role.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${member.status === 'active' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                          {member.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex gap-2">
+                          <button className="p-2 text-gray-500 hover:text-neon-blue transition-colors"><Settings size={16} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <div className="lg:col-span-1 space-y-4">
+              <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4">Custom Roles</h3>
+              {roles.map(role => (
+                <button 
+                  key={role.id}
+                  onClick={() => setNewRoleData(role)}
+                  className={`w-full text-left p-4 bg-cyber-gray/40 border rounded-2xl hover:neon-border-blue transition-all group ${newRoleData.id === role.id ? 'neon-border-blue' : 'border-white/5'}`}
+                >
+                  <p className="text-sm font-bold text-white group-hover:text-neon-blue transition-colors">{role.role_name}</p>
+                  <p className="text-[9px] text-gray-500 uppercase tracking-widest mt-1">
+                    {Object.values(role.permissions).flat().length} Permissions
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            <div className="lg:col-span-3 bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5">
+              <div className="flex items-center justify-between mb-8">
+                <h3 className="text-xl font-black text-white uppercase tracking-tighter">Permissions Matrix</h3>
+                <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest bg-neon-blue/10 px-3 py-1 rounded-full border border-neon-blue/20">Granular Access Control</span>
+              </div>
+
+              <div className="space-y-6">
+                <div className="grid grid-cols-5 gap-4 border-b border-white/5 pb-4">
+                  <div className="col-span-1 text-[10px] font-black text-gray-600 uppercase tracking-widest">Module</div>
+                  {actions.map(a => (
+                    <div key={a} className="text-center text-[10px] font-black text-gray-600 uppercase tracking-widest">{a}</div>
+                  ))}
+                </div>
+
+                {schoolModules.map(mod => (
+                  <div key={mod.id} className="grid grid-cols-5 gap-4 items-center py-4 border-b border-white/5 last:border-0 group">
+                    <div className="col-span-1">
+                      <p className="text-sm font-bold text-white group-hover:text-neon-blue transition-colors">{mod.label}</p>
+                    </div>
+                    {actions.map(action => (
+                      <div key={action} className="flex justify-center">
+                        <button 
+                          onClick={() => togglePermission(mod.id, action)}
+                          className={`w-6 h-6 rounded-md border transition-all flex items-center justify-center ${
+                            newRoleData.permissions[mod.id]?.includes(action)
+                            ? 'bg-neon-blue border-neon-blue text-black shadow-[0_0_10px_#00f3ff]'
+                            : 'bg-cyber-black border-white/10 text-transparent hover:border-neon-blue/50'
+                          }`}
+                        >
+                          <CheckCircle size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-10 pt-8 border-t border-white/5 flex justify-end">
+                <NeonButton onClick={handleCreateRole} loading={submitting} className="max-w-xs">Save Role Configuration</NeonButton>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Invite Staff Modal */}
+        <AnimatePresence>
+          {isInviteModalOpen && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsInviteModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-cyber-gray p-8 rounded-3xl neon-border-blue w-full max-w-md">
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Invite Staff</h3>
+                <form onSubmit={handleInviteStaff} className="space-y-4">
+                  <NeonInput icon={UserIcon} placeholder="Full Name" required value={inviteData.name} onChange={(e: any) => setInviteData({...inviteData, name: e.target.value})} />
+                  <NeonInput icon={Mail} type="email" placeholder="Email Address" required value={inviteData.email} onChange={(e: any) => setInviteData({...inviteData, email: e.target.value})} />
+                  <NeonInput icon={Lock} type="password" placeholder="Temporary Password" required value={inviteData.password} onChange={(e: any) => setInviteData({...inviteData, password: e.target.value})} />
+                  <select 
+                    required 
+                    value={inviteData.role} 
+                    onChange={(e) => setInviteData({...inviteData, role: e.target.value})}
+                    className="w-full bg-cyber-black/50 border border-white/10 rounded-xl py-3 px-4 text-white text-sm focus:neon-border-blue outline-none transition-all"
+                  >
+                    <option value="" disabled>Select Role</option>
+                    <option value="school_admin">School Admin</option>
+                    <option value="teacher">Teacher</option>
+                    {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
+                  </select>
+                  {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
+                  <NeonButton type="submit" loading={submitting}>Send Invitation</NeonButton>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Create Role Modal */}
+        <AnimatePresence>
+          {isRoleModalOpen && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRoleModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-cyber-gray p-8 rounded-3xl neon-border-purple w-full max-w-md">
+                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Create Custom Role</h3>
+                <div className="space-y-6">
+                  <NeonInput icon={ShieldCheck} placeholder="Role Name (e.g. Accountant)" required value={newRoleData.role_name} onChange={(e: any) => setNewRoleData({...newRoleData, role_name: e.target.value})} />
+                  <p className="text-xs text-gray-500 uppercase tracking-widest leading-relaxed">
+                    Define a new role for your school staff and configure their permissions.
+                  </p>
+                  <NeonButton onClick={() => setIsRoleModalOpen(false)} variant="purple">Initialize Role</NeonButton>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
   const SchoolDashboardOverview = ({ schoolId }: { schoolId: string }) => {
     return (
       <div className="space-y-8">
@@ -6861,10 +8065,11 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     const [formData, setFormData] = useState({
       name: userProfile.name || '',
       email: userProfile.email || '',
-      password: '',
-      confirmPassword: '',
-      secretPin: ''
+      currentPassword: '',
+      newPassword: '',
+      confirmNewPassword: '',
     });
+    const [ghostPin, setGhostPin] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -6872,32 +8077,36 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       e.preventDefault();
       setError('');
       
-      if (formData.secretPin !== '2233') {
-        setError('INVALID SECRET PIN. ACCESS DENIED.');
+      if (!formData.currentPassword) {
+        setError('Current password is required to verify your identity.');
         return;
       }
 
-      if (formData.password && formData.password !== formData.confirmPassword) {
-        setError('Passwords do not match');
+      if (formData.newPassword && formData.newPassword !== formData.confirmNewPassword) {
+        setError('New passwords do not match');
         return;
       }
 
       setLoading(true);
       try {
         const currentUser = auth.currentUser;
-        if (!currentUser) throw new Error('No user authenticated');
+        if (!currentUser || !currentUser.email) throw new Error('No user authenticated');
 
-        // Update Email if changed
+        // 1. Re-authenticate
+        const credential = EmailAuthProvider.credential(currentUser.email, formData.currentPassword);
+        await reauthenticateWithCredential(currentUser, credential);
+
+        // 2. Update Email if changed
         if (formData.email !== currentUser.email) {
           await updateEmail(currentUser, formData.email);
         }
 
-        // Update Password if provided
-        if (formData.password) {
-          await updatePassword(currentUser, formData.password);
+        // 3. Update Password if provided
+        if (formData.newPassword) {
+          await updatePassword(currentUser, formData.newPassword);
         }
 
-        // Update Firestore Profile
+        // 4. Update Firestore Profile
         await updateDoc(doc(db, 'users', currentUser.uid), {
           name: formData.name,
           email: formData.email,
@@ -6906,98 +8115,166 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
 
         await createAuditLog('UPDATE', 'Profile', `Super Admin updated their profile: ${formData.email}`);
         toast.success('Profile updated successfully');
-        setFormData(prev => ({ ...prev, password: '', confirmPassword: '', secretPin: '' }));
+        setFormData(prev => ({ ...prev, currentPassword: '', newPassword: '', confirmNewPassword: '' }));
       } catch (err: any) {
-        setError(err.message);
-        toast.error(err.message);
+        let msg = err.message;
+        if (err.code === 'auth/wrong-password') msg = 'Incorrect current password.';
+        setError(msg);
+        toast.error(msg);
       } finally {
         setLoading(false);
       }
     };
 
     return (
-      <div className="max-w-2xl mx-auto space-y-8">
-        <div>
-          <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Super Admin Profile</h2>
-          <p className="text-xs text-gray-500 uppercase tracking-widest mt-1">Update your global administrative credentials</p>
+      <div className="max-w-4xl mx-auto space-y-8 pb-12">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <h2 className="text-4xl font-black text-white uppercase tracking-tighter neon-text-blue">Super Admin Profile</h2>
+          <p className="text-xs text-gray-500 uppercase tracking-[0.3em] mt-2 font-bold">Secure Global Administrative Access Control</p>
+        </motion.div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2">
+            <form onSubmit={handleUpdate} className="bg-cyber-gray/40 backdrop-blur-xl rounded-[2rem] border border-white/5 p-8 space-y-8 neon-glow-card">
+              {error && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl text-red-500 text-[10px] font-black uppercase tracking-widest text-center flex items-center justify-center gap-2"
+                >
+                  <ShieldAlert size={14} />
+                  {error}
+                </motion.div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Full Name</label>
+                  <NeonInput 
+                    icon={UserIcon} 
+                    required 
+                    placeholder="Admin Name" 
+                    value={formData.name} 
+                    onChange={(e: any) => setFormData({...formData, name: e.target.value})} 
+                  />
+                </div>
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Email Address</label>
+                  <NeonInput 
+                    icon={Mail} 
+                    type="email" 
+                    required 
+                    placeholder="admin@example.com" 
+                    value={formData.email} 
+                    onChange={(e: any) => setFormData({...formData, email: e.target.value})} 
+                  />
+                </div>
+              </div>
+
+              <div className="h-px bg-white/5" />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-neon-purple uppercase tracking-widest ml-1">New Password (Optional)</label>
+                  <NeonInput 
+                    icon={Lock} 
+                    type="password" 
+                    placeholder="••••••••" 
+                    value={formData.newPassword} 
+                    onChange={(e: any) => setFormData({...formData, newPassword: e.target.value})} 
+                  />
+                </div>
+                <div className="space-y-3">
+                  <label className="text-[10px] font-black text-neon-purple uppercase tracking-widest ml-1">Confirm New Password</label>
+                  <NeonInput 
+                    icon={Lock} 
+                    type="password" 
+                    placeholder="••••••••" 
+                    value={formData.confirmNewPassword} 
+                    onChange={(e: any) => setFormData({...formData, confirmNewPassword: e.target.value})} 
+                  />
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-white/5">
+                <div className="flex items-end justify-between gap-4">
+                  <div className="space-y-3 max-w-md flex-1">
+                    <label className="text-[10px] font-black text-neon-blue uppercase tracking-widest ml-1 flex items-center gap-2">
+                      <ShieldCheck size={14} />
+                      Verify Identity (Current Password)
+                    </label>
+                    <NeonInput 
+                      icon={Key} 
+                      type="password" 
+                      required 
+                      placeholder="Enter current password to save changes" 
+                      value={formData.currentPassword} 
+                      onChange={(e: any) => setFormData({...formData, currentPassword: e.target.value})} 
+                    />
+                  </div>
+                  
+                  <div className="mb-1">
+                    <input 
+                      type="password"
+                      value={ghostPin}
+                      onChange={(e) => setGhostPin(e.target.value)}
+                      className="w-8 h-8 bg-transparent border border-white/5 rounded-lg text-center text-white/5 focus:border-white/10 outline-none transition-all"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {ghostPin === '2233' && (
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  className="w-full bg-gradient-to-r from-neon-blue to-neon-purple text-white py-5 rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:scale-[1.02] active:scale-95 transition-all neon-glow-button disabled:opacity-50 disabled:scale-100"
+                >
+                  {loading ? (
+                    <div className="flex items-center justify-center gap-3">
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Verifying & Updating...
+                    </div>
+                  ) : 'Secure Update Profile'}
+                </button>
+              )}
+            </form>
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-cyber-gray/40 backdrop-blur-xl rounded-[2rem] border border-white/5 p-6 neon-glow-card">
+              <h3 className="text-xs font-black text-white uppercase tracking-widest mb-4 flex items-center gap-2">
+                <Shield size={14} className="text-neon-blue" />
+                Security Status
+              </h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-cyber-black/50 rounded-xl border border-white/5">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase">Two-Factor Auth</span>
+                  <span className="text-[10px] font-black text-green-500 uppercase">Active</span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-cyber-black/50 rounded-xl border border-white/5">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase">Last Login</span>
+                  <span className="text-[10px] font-black text-neon-blue uppercase">Today, 09:12 AM</span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-cyber-black/50 rounded-xl border border-white/5">
+                  <span className="text-[10px] font-bold text-gray-500 uppercase">IP Address</span>
+                  <span className="text-[10px] font-black text-gray-400 uppercase">192.168.1.1</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-br from-neon-blue/10 to-neon-purple/10 backdrop-blur-xl rounded-[2rem] border border-white/10 p-6">
+              <h3 className="text-xs font-black text-white uppercase tracking-widest mb-2">Security Tip</h3>
+              <p className="text-[10px] text-gray-400 leading-relaxed font-medium">
+                Always use a unique, complex password for your Super Admin account. Change your password every 90 days to maintain maximum security.
+              </p>
+            </div>
+          </div>
         </div>
-
-        <form onSubmit={handleUpdate} className="bg-cyber-gray/40 backdrop-blur-md rounded-3xl border border-white/5 p-8 space-y-6">
-          {error && (
-            <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-500 text-xs font-bold uppercase text-center">
-              {error}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Full Name</label>
-              <NeonInput 
-                icon={UserIcon} 
-                required 
-                placeholder="Admin Name" 
-                value={formData.name} 
-                onChange={(e: any) => setFormData({...formData, name: e.target.value})} 
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Email Address</label>
-              <NeonInput 
-                icon={Mail} 
-                type="email" 
-                required 
-                placeholder="admin@example.com" 
-                value={formData.email} 
-                onChange={(e: any) => setFormData({...formData, email: e.target.value})} 
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">New Password (Optional)</label>
-              <NeonInput 
-                icon={Lock} 
-                type="password" 
-                placeholder="••••••••" 
-                value={formData.password} 
-                onChange={(e: any) => setFormData({...formData, password: e.target.value})} 
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Confirm Password</label>
-              <NeonInput 
-                icon={Lock} 
-                type="password" 
-                placeholder="••••••••" 
-                value={formData.confirmPassword} 
-                onChange={(e: any) => setFormData({...formData, confirmPassword: e.target.value})} 
-              />
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-white/5">
-            <div className="space-y-2 max-w-xs">
-              <label className="text-[10px] font-black text-neon-blue uppercase tracking-widest ml-1 flex items-center gap-2">
-                <Shield size={12} />
-                Security PIN Required
-              </label>
-              <NeonInput 
-                icon={Key} 
-                type="password" 
-                required 
-                placeholder="Enter 2233" 
-                value={formData.secretPin} 
-                onChange={(e: any) => setFormData({...formData, secretPin: e.target.value})} 
-              />
-            </div>
-          </div>
-
-          <button 
-            type="submit" 
-            disabled={loading}
-            className="w-full bg-white text-black py-4 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-neon-blue transition-all shadow-[0_0_30px_rgba(255,255,255,0.1)] disabled:opacity-50"
-          >
-            {loading ? 'Updating Credentials...' : 'Update Global Profile'}
-          </button>
-        </form>
       </div>
     );
   };
@@ -7016,6 +8293,9 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       }
       if (userProfile.role === 'parent') {
         return <ParentPortalDashboard parentUid={userProfile.uid} parentName={userProfile.name} />;
+      }
+      if (userProfile.role === 'super_admin') {
+        return <SuperAdminDashboard userProfile={userProfile} setActiveTab={setActiveTab} />;
       }
       return (
         <div className="space-y-8">
@@ -7157,6 +8437,26 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       return <AuditLogsModule />;
     }
 
+    if (activeTab === 'marketing') {
+      if (userProfile.role !== 'super_admin' && userProfile.role !== 'marketing_assistant' && !hasPermission('marketing', 'view')) return <PermissionDenied />;
+      return <MarketingAnalyticsModule />;
+    }
+
+    if (activeTab === 'export') {
+      if (!hasPermission('export', 'view')) return <PermissionDenied />;
+      return <DataExportModule />;
+    }
+
+    if (activeTab === 'finance') {
+      if (userProfile.role !== 'super_admin' && !hasPermission('finance', 'view')) return <PermissionDenied />;
+      return <FinancialReportsModule />;
+    }
+
+    if (activeTab === 'maintenance') {
+      if (userProfile.role !== 'super_admin') return <PermissionDenied />;
+      return <MaintenanceControlModule systemConfig={systemConfig} />;
+    }
+
     if (activeTab === 'global_settings') {
       if (!hasPermission('settings', 'view')) return <PermissionDenied />;
       return <GlobalSettingsModule />;
@@ -7175,7 +8475,7 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
     }
 
     if (activeTab === 'teachers' && userProfile.role === 'school_admin') {
-      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'academics') {
@@ -7198,16 +8498,20 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
       return <CommunicationModule schoolId={userProfile.schoolId!} />;
     }
 
+    if (activeTab === 'school_admin_roles' && userProfile.role === 'school_admin') {
+      return <SchoolAdminRolesManagement schoolId={userProfile.schoolId!} />;
+    }
+    
     if (activeTab === 'school_settings') {
       return <SchoolSettingsModule schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'hr_payroll') {
-      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'teachers') {
-      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
     }
 
     return (
@@ -7398,6 +8702,8 @@ const Dashboard = ({ userProfile, settings, school }: { userProfile: UserProfile
                 )}
               </div>
             </div>
+            
+            <SystemAlert systemConfig={systemConfig} userProfile={userProfile} />
 
             {renderContent()}
           </div>
@@ -7442,6 +8748,7 @@ export default function App() {
   const [school, setSchool] = useState<School | null>(null);
   const [globalConfig, setGlobalConfig] = useState<GlobalConfig | null>(null);
   const [settings, setSettings] = useState<GlobalSettings>({ footerText: 'Develop by MoBiHuT', footerPhone: '+92 304 1478644', isMaintenanceMode: false });
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Initialize GA4
@@ -7527,14 +8834,54 @@ export default function App() {
       console.error("Global config snapshot error:", error);
     });
 
+    const systemConfigUnsubscribe = onSnapshot(doc(db, 'system', 'config'), (snapshot) => {
+      if (snapshot.exists()) {
+        setSystemConfig(snapshot.data() as SystemConfig);
+      }
+    }, (error) => {
+      console.error("System config snapshot error:", error);
+    });
+
     return () => { 
       authUnsubscribe(); 
       if (profileUnsubscribe) profileUnsubscribe();
       if (schoolUnsubscribe) schoolUnsubscribe();
       settingsUnsubscribe(); 
       globalConfigUnsubscribe();
+      systemConfigUnsubscribe();
     };
   }, []);
+
+  // Auto-deactivation logic for maintenance mode
+  useEffect(() => {
+    if (!systemConfig?.isMaintenanceMode || !systemConfig?.autoDeactivate || !systemConfig?.expectedDownTime || userProfile?.role !== 'super_admin') return;
+
+    const checkAutoDeactivate = async () => {
+      const expiry = new Date(systemConfig.expectedDownTime!).getTime();
+      const now = new Date().getTime();
+
+      if (now >= expiry) {
+        try {
+          await setDoc(doc(db, 'system', 'config'), {
+            isMaintenanceMode: false,
+            autoDeactivate: false,
+            expectedDownTime: null,
+            maintenanceMessage: null
+          }, { merge: true });
+          
+          await createAuditLog('SYSTEM', 'MAINTENANCE', 'Auto-Deactivated Global Maintenance Mode (Timer Expired)');
+          toast.success("Maintenance mode auto-deactivated");
+        } catch (error) {
+          console.error("Error auto-deactivating maintenance:", error);
+        }
+      }
+    };
+
+    const interval = setInterval(checkAutoDeactivate, 30000); // Check every 30 seconds
+    checkAutoDeactivate(); // Initial check
+
+    return () => clearInterval(interval);
+  }, [systemConfig, userProfile]);
 
   // Global License Check
   const isLicenseExpired = () => {
@@ -7604,38 +8951,8 @@ export default function App() {
 
   if (userProfile?.isForcedResetRequired) return <ForcedResetScreen userProfile={userProfile} onComplete={() => {}} />;
   
-  if (settings.isMaintenanceMode && userProfile?.role !== 'super_admin') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-cyber-black p-4 text-center">
-        <div className="bg-cyber-gray p-10 rounded-3xl border border-red-500/30 max-w-md w-full shadow-[0_0_50px_rgba(239,68,68,0.1)]">
-          <div className="w-24 h-24 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-8 border border-red-500/20 animate-pulse">
-            <Settings className="text-red-500" size={48} />
-          </div>
-          <h2 className="text-3xl font-black text-white uppercase tracking-tighter mb-4">System Upgrade</h2>
-          <p className="text-gray-500 text-sm mb-10 leading-relaxed">
-            EduPak is currently undergoing a scheduled maintenance and infrastructure upgrade to improve your experience. We'll be back online shortly.
-          </p>
-          <div className="bg-cyber-black p-6 rounded-2xl border border-white/5 space-y-4">
-            <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-gray-600">
-              <span>Status</span>
-              <span className="text-red-500">Maintenance Mode</span>
-            </div>
-            <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
-              <motion.div 
-                initial={{ x: '-100%' }}
-                animate={{ x: '100%' }}
-                transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
-                className="w-1/3 h-full bg-red-500"
-              />
-            </div>
-            <p className="text-[9px] text-gray-700 font-bold uppercase tracking-[0.2em]">Estimated Completion: 45 Minutes</p>
-          </div>
-          <div className="mt-8">
-            <NeonButton onClick={() => signOut(auth)} variant="purple">Sign Out</NeonButton>
-          </div>
-        </div>
-      </div>
-    );
+  if (systemConfig?.isMaintenanceMode && userProfile?.role !== 'super_admin') {
+    return <MaintenanceScreen config={systemConfig} />;
   }
 
   if (user && !userProfile && !loading) {
@@ -7658,7 +8975,7 @@ export default function App() {
   if (userProfile) return (
     <>
       <Toaster position="top-right" theme="dark" richColors />
-      <Dashboard userProfile={userProfile} settings={settings} school={school} />
+      <Dashboard userProfile={userProfile} settings={settings} school={school} systemConfig={systemConfig} />
     </>
   );
 

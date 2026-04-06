@@ -22,7 +22,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { db, storage } from '../firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { toast } from 'sonner';
 
@@ -112,8 +112,14 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
   const onSubmit = async (data: AdmissionFormData) => {
     setIsSubmitting(true);
     try {
-      // 1. Generate a temporary ID for storage path
-      const studentId = `STU-${Date.now()}`;
+      // 1. Generate a professional unique Student ID
+      const year = new Date().getFullYear();
+      const studentsRef = collection(db, 'students');
+      const q = query(studentsRef, where('school_id', '==', schoolId));
+      const snapshot = await getDocs(q);
+      const studentCount = snapshot.size + 1;
+      const studentId = `EP-${year}-${studentCount.toString().padStart(4, '0')}`;
+      
       let photoUrl = "";
 
       // 2. Upload Photo if exists

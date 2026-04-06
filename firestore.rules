@@ -1,6 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // ===============================================================
+    // Public Settings
+    // ===============================================================
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
 
     // ===============================================================
     // Helper Functions
@@ -178,16 +185,6 @@ service cloud.firestore {
         resource.data.student_uid == request.auth.uid
       );
       allow delete: if isSuperAdmin();
-    }
-
-    match /settings/global {
-      allow read: if true;
-      allow write: if isSuperAdmin();
-    }
-
-    match /settings/global_config {
-      allow read: if isAuthenticated();
-      allow write: if isSuperAdmin();
     }
 
     match /support_tickets/{ticketId} {

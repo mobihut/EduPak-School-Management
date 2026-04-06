@@ -8,6 +8,9 @@
   --color-neon-blue: #00f3ff;
   --color-neon-purple: #bc13fe;
   --color-neon-indigo: #6366f1;
+  --color-neon-green: #00ff00;
+  --color-neon-red: #ff003c;
+  --color-neon-orange: #ff8c00;
   --color-cyber-black: #050505;
   --color-cyber-gray: #1a1a1a;
 }
@@ -57,6 +60,33 @@
   .neon-glow-hover:hover {
     box-shadow: 0 0 15px var(--color-neon-blue), 0 0 30px var(--color-neon-blue);
     transform: translateY(-2px);
+  }
+
+  .animate-gradient-x {
+    background-size: 200% 200%;
+    animation: gradient-x 15s ease infinite;
+  }
+
+  @keyframes gradient-x {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  .neon-glow-card {
+    box-shadow: 0 0 15px rgba(0, 243, 255, 0.1);
+    transition: all 0.3s ease;
+  }
+
+  .neon-glow-card:hover {
+    box-shadow: 0 0 25px rgba(0, 243, 255, 0.2);
+  }
+
+  .neon-glow-button {
+    box-shadow: 0 0 10px rgba(99, 102, 241, 0.3);
+  }
+
+  .neon-glow-button:hover {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.5);
   }
 
   .custom-scrollbar::-webkit-scrollbar {

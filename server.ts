@@ -794,13 +794,19 @@ app.post('/api/admin/backup/restore', async (req, res) => {
 
   // Invite Staff Route
   app.post('/api/admin/invite-staff', async (req, res) => {
-    const { email, password, role, name, adminUid } = req.body;
+    const { email, password, role, name, adminUid, schoolId } = req.body;
 
     try {
-      // 1. Verify the requester is a super_admin
+      // 1. Verify the requester
       const adminDoc = await db.collection('users').doc(adminUid).get();
-      if (!adminDoc.exists || adminDoc.data()?.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Unauthorized: Only Super Admins can invite staff.' });
+      const adminData = adminDoc.data();
+      if (!adminDoc.exists || (adminData?.role !== 'super_admin' && adminData?.role !== 'school_admin')) {
+        return res.status(403).json({ error: 'Unauthorized: Only Admins can invite staff.' });
+      }
+
+      // If School Admin, ensure they are inviting to their own school
+      if (adminData.role === 'school_admin' && adminData.schoolId !== schoolId) {
+        return res.status(403).json({ error: 'Unauthorized: You can only invite staff to your own school.' });
       }
 
       // 2. Create the user in Firebase Auth
@@ -811,20 +817,52 @@ app.post('/api/admin/backup/restore', async (req, res) => {
       });
 
       // 3. Create the user profile in Firestore
-      await db.collection('users').doc(userRecord.uid).set({
+      const userProfile = {
         uid: userRecord.uid,
         email,
         name,
         role,
+        schoolId: schoolId || null,
         status: 'active',
         isForcedResetRequired: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         lastActive: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+
+      await db.collection('users').doc(userRecord.uid).set(userProfile);
+
+      // 4. If it's a super admin assistant, add to super_admin_team
+      if (adminData.role === 'super_admin') {
+        await db.collection('super_admin_team').doc(userRecord.uid).set({
+          uid: userRecord.uid,
+          is2FAEnabled: false,
+          lastIp: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+          permissions: {},
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
 
       res.json({ success: true, uid: userRecord.uid });
     } catch (error: any) {
       console.error('Error inviting staff:', error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post('/api/admin/log-activity', async (req, res) => {
+    const { actor_uid, actor_email, action_type, resource, details } = req.body;
+    try {
+      await db.collection('audit_logs').add({
+        actor_uid,
+        actor_email,
+        action_type,
+        resource,
+        details,
+        ip_address: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+        timestamp: admin.firestore.FieldValue.serverTimestamp()
+      });
+      res.json({ success: true });
+    } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
