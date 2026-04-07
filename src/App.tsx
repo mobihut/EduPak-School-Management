@@ -1112,8 +1112,11 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
         { category: 'SCHOOL MANAGEMENT', items: [
           { id: 'overview', label: 'Dashboard Overview', icon: LayoutDashboard },
           { id: 'students', label: 'Student Management', icon: GraduationCap },
+          { id: 'student_info', label: 'Student Information', icon: Info },
           { id: 'attendance', label: 'Student Attendance', icon: CheckCircle2 },
           { id: 'teachers', label: 'HR & Teachers', icon: Users },
+          { id: 'teacher_portal', label: 'Teacher Portal', icon: UserCheck2 },
+          { id: 'parent_portal', label: 'Parent Portal', icon: Users },
           { id: 'leave_approval', label: 'Leave Approval', icon: Clock },
           { id: 'academics', label: 'Academic & Classes', icon: BookOpen },
           { id: 'fees', label: 'Fee Collection', icon: DollarSign },
