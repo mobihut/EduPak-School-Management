@@ -57,7 +57,11 @@
             "dob": { "type": "string", "format": "date" },
             "gender": { "type": "string", "enum": ["male", "female", "other"] },
             "bloodGroup": { "type": "string" },
-            "photoUrl": { "type": "string" }
+            "photoUrl": { "type": "string" },
+            "cnic_bform": { "type": "string" },
+            "religion": { "type": "string" },
+            "nationality": { "type": "string" },
+            "medical_history": { "type": "string", "description": "Allergies, chronic conditions, etc." }
           }
         },
         "academic_info": {
@@ -66,17 +70,12 @@
             "grade": { "type": "string" },
             "section": { "type": "string" },
             "rollNumber": { "type": "string" },
-            "previousSchool": { "type": "string" }
+            "previousSchool": { "type": "string" },
+            "house": { "type": "string" },
+            "admission_no": { "type": "string" },
+            "clubs": { "type": "array", "items": { "type": "string" } }
           }
         },
-        "attendance_stats": {
-          "type": "object",
-          "properties": {
-            "percentage": { "type": "number" },
-            "status": { "type": "string", "enum": ["gold", "silver", "bronze"] }
-          }
-        },
-        "gpa": { "type": "number" },
         "guardian_info": {
           "type": "object",
           "properties": {
@@ -84,10 +83,53 @@
             "phone": { "type": "string" },
             "email": { "type": "string", "format": "email" },
             "cnic": { "type": "string" },
-            "address": { "type": "string" }
+            "address": { "type": "string" },
+            "occupation": { "type": "string" },
+            "relation": { "type": "string" }
           }
         },
-        "status": { "type": "string", "enum": ["active", "inactive", "suspended"] },
+        "transport_info": {
+          "type": "object",
+          "properties": {
+            "route_name": { "type": "string" },
+            "stop_name": { "type": "string" },
+            "vehicle_no": { "type": "string" }
+          }
+        },
+        "sibling_ids": { "type": "array", "items": { "type": "string" } },
+        "qr_code": { "type": "string" },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "type": { "type": "string" },
+              "uploaded_at": { "type": "string", "format": "date-time" }
+            }
+          }
+        },
+        "timeline": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event": { "type": "string" },
+              "date": { "type": "string", "format": "date-time" },
+              "type": { "type": "string" },
+              "details": { "type": "string" }
+            }
+          }
+        },
+        "behavior_stats": {
+          "type": "object",
+          "properties": {
+            "merits": { "type": "number" },
+            "demerits": { "type": "number" }
+          }
+        },
+        "status": { "type": "string", "enum": ["active", "inactive", "suspended", "withdrawn", "alumni"] },
         "admission_date": { "type": "string", "format": "date" },
         "created_at": { "type": "string", "format": "date-time" }
       },
@@ -388,17 +430,26 @@
       "description": "A staff member (teaching or non-teaching) within a school.",
       "type": "object",
       "properties": {
-        "staff_id": { "type": "string" },
+        "id": { "type": "string" },
         "school_id": { "type": "string" },
         "name": { "type": "string" },
         "designation": { "type": "string" },
         "department": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "on-leave", "resigned", "terminated"] },
         "contact_info": {
           "type": "object",
           "properties": {
             "phone": { "type": "string" },
             "email": { "type": "string", "format": "email" },
-            "address": { "type": "string" }
+            "address": { "type": "string" },
+            "emergency_contact": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "relation": { "type": "string" },
+                "phone": { "type": "string" }
+              }
+            }
           }
         },
         "payroll": {
@@ -408,12 +459,15 @@
             "allowances": { "type": "number" },
             "deductions": { "type": "number" },
             "bank_account": { "type": "string" },
-            "leave_balances": {
-              "type": "object",
-              "properties": {
-                "casual_leaves": { "type": "number" },
-                "medical_leaves": { "type": "number" },
-                "half_day_leaves": { "type": "number" }
+            "increment_history": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "date": { "type": "string", "format": "date" },
+                  "amount": { "type": "number" },
+                  "reason": { "type": "string" }
+                }
               }
             }
           }
@@ -423,15 +477,70 @@
           "properties": {
             "qualifications": { "type": "string" },
             "experience": { "type": "string" },
-            "joining_date": { "type": "string", "format": "date" }
+            "joining_date": { "type": "string", "format": "date" },
+            "documents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": { "type": "string" },
+                  "url": { "type": "string" },
+                  "type": { "type": "string" },
+                  "uploaded_at": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
           }
         },
-        "assigned_classes": { "type": "array", "items": { "type": "string" } },
-        "is_active": { "type": "boolean" },
+        "performance": {
+          "type": "object",
+          "properties": {
+            "rating": { "type": "number" },
+            "reviews": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "date": { "type": "string", "format": "date" },
+                  "rating": { "type": "number" },
+                  "remarks": { "type": "string" },
+                  "reviewer": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "workload": {
+          "type": "object",
+          "properties": {
+            "periods_per_week": { "type": "number" },
+            "assigned_subjects": { "type": "array", "items": { "type": "string" } }
+          }
+        },
         "user_uid": { "type": "string", "description": "Linked Firebase Auth UID if they have app access." },
         "created_at": { "type": "string", "format": "date-time" }
       },
-      "required": ["staff_id", "school_id", "name", "designation", "department", "is_active"]
+      "required": ["id", "school_id", "name", "designation", "department", "status"]
+    },
+    "StaffAttendance": {
+      "title": "Staff Attendance",
+      "description": "Daily attendance record for a staff member.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "school_id": { "type": "string" },
+        "staff_id": { "type": "string" },
+        "staff_name": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "short-leave"] },
+        "check_in": { "type": "string", "format": "time" },
+        "check_out": { "type": "string", "format": "time" },
+        "remarks": { "type": "string" },
+        "marked_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["school_id", "staff_id", "date", "status"]
     },
     "AttendanceRecord": {
       "title": "Attendance Record",
@@ -574,8 +683,28 @@
       },
       "required": ["id", "assignment_id", "student_id", "school_id", "submission_url", "submitted_at", "status"]
     }
+    "BehaviorRecord": {
+      "title": "BehaviorRecord",
+      "description": "Logs student behavior incidents, stars, or warnings.",
+      "type": "object",
+      "properties": {
+        "school_id": { "type": "string" },
+        "student_id": { "type": "string" },
+        "teacher_uid": { "type": "string" },
+        "type": { "type": "string", "enum": ["star", "warning", "note"] },
+        "category": { "type": "string" },
+        "points": { "type": "number" },
+        "description": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["school_id", "student_id", "teacher_uid", "type"]
+    }
   },
   "firestore": {
+    "/behavior_records/{recordId}": {
+      "schema": "BehaviorRecord",
+      "description": "Collection of student behavior logs."
+    },
     "/schools/{schoolId}": { "schema": "School", "description": "Collection of schools." },
     "/users/{userId}": { "schema": "User", "description": "Collection of users." },
     "/students/{studentId}": { "schema": "Student", "description": "Collection of all students across schools." },
@@ -596,6 +725,10 @@
     "/fee_payments/{paymentId}": { "schema": "FeePayment", "description": "Global collection of fee payments." },
     "/attendance_records/{recordId}": { "schema": "AttendanceRecord", "description": "Daily attendance records for classes." },
     "/staff/{staffId}": { "schema": "Staff", "description": "Collection of all staff members across schools." },
+    "/staff_attendance/{attendanceId}": {
+      "schema": "StaffAttendance",
+      "description": "Daily attendance records for staff."
+    },
     "/exams/{examId}": { "schema": "Exam", "description": "Exam definitions." },
     "/exam_marks/{markId}": { "schema": "ExamMark", "description": "Student exam marks." },
     "/timetables/{timetableId}": { "schema": "Timetable", "description": "Weekly academic schedules for class sections." },

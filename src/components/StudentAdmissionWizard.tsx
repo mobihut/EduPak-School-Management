@@ -1,30 +1,21 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  User, 
-  BookOpen, 
-  Users, 
-  CheckCircle, 
-  ChevronRight, 
-  ChevronLeft, 
-  Upload, 
-  X, 
-  Loader2,
-  Calendar,
-  Phone,
-  Mail,
-  CreditCard,
-  MapPin,
-  Droplets,
-  ArrowRight
+  User, BookOpen, Users, CheckCircle, ChevronRight, 
+  ChevronLeft, Upload, X, Loader2, Calendar, Phone, 
+  Mail, CreditCard, MapPin, Droplets, ArrowRight, 
+  Camera, ShieldCheck, FileText, Heart, Star, Bus, 
+  Home, Save, Trash2, ArrowLeft
 } from 'lucide-react';
 import { db, storage } from '../firebase';
-import { collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, where, getDocs, Timestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { toast } from 'sonner';
+import ReactCrop, { centerCrop, makeAspectCrop, Crop, PixelCrop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 
 // --- Form Schema ---
 const admissionSchema = z.object({
@@ -34,6 +25,10 @@ const admissionSchema = z.object({
   dob: z.string().min(1, "Date of birth is required"),
   gender: z.enum(["male", "female", "other"]),
   bloodGroup: z.string().optional(),
+  cnic_bform: z.string().optional(),
+  religion: z.string().optional(),
+  nationality: z.string().min(1, "Nationality is required"),
+  medicalHistory: z.string().optional(),
   
   // Step 2: Academic Details
   admissionDate: z.string().min(1, "Admission date is required"),
@@ -41,13 +36,17 @@ const admissionSchema = z.object({
   section: z.string().min(1, "Section is required"),
   rollNumber: z.string().optional(),
   previousSchool: z.string().optional(),
+  house: z.string().optional(),
+  clubs: z.string().optional(), 
   
   // Step 3: Guardian Details
   guardianName: z.string().min(2, "Guardian name is required"),
   guardianPhone: z.string().regex(/^\+?[0-9]{10,15}$/, "Invalid phone number"),
   guardianEmail: z.string().email("Invalid email address").optional().or(z.literal('')),
-  guardianCnic: z.string().min(5, "CNIC is required"),
+  guardianCnic: z.string().optional(),
   homeAddress: z.string().min(10, "Address is too short"),
+  guardianOccupation: z.string().optional(),
+  guardianRelation: z.string().min(1, "Relation is required"),
 });
 
 type AdmissionFormData = z.infer<typeof admissionSchema>;
@@ -61,7 +60,14 @@ interface StudentAdmissionWizardProps {
 const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolId, onSuccess, onCancel }) => {
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  
+  // Photo & Cropping State
+  const [imgSrc, setImgSrc] = useState('');
+  const [crop, setCrop] = useState<Crop>();
+  const [completedCrop, setCompletedCrop] = useState<PixelCrop>();
+  const [isCropping, setIsCropping] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [finalPhotoBlob, setFinalPhotoBlob] = useState<Blob | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const {
@@ -75,6 +81,8 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
     defaultValues: {
       admissionDate: new Date().toISOString().split('T')[0],
       gender: "male",
+      nationality: "Pakistani",
+      guardianRelation: "Father",
       firstName: "",
       lastName: "",
       dob: "",
@@ -82,16 +90,69 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
       section: "",
       guardianName: "",
       guardianPhone: "",
-      guardianCnic: "",
       homeAddress: "",
     }
   });
+
+  const onSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setCrop(undefined);
+      const reader = new FileReader();
+      reader.addEventListener('load', () => {
+        setImgSrc(reader.result?.toString() || '');
+        setIsCropping(true);
+      });
+      reader.readAsDataURL(e.target.files[0]);
+    }
+  };
+
+  const onImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { width, height } = e.currentTarget;
+    setCrop(centerCrop(
+      makeAspectCrop({ unit: '%', width: 90 }, 1, width, height),
+      width,
+      height
+    ));
+  };
+
+  const getCroppedImg = useCallback(async () => {
+    if (!completedCrop || !imgRef.current) return;
+
+    const canvas = document.createElement('canvas');
+    const scaleX = imgRef.current.naturalWidth / imgRef.current.width;
+    const scaleY = imgRef.current.naturalHeight / imgRef.current.height;
+    canvas.width = completedCrop.width;
+    canvas.height = completedCrop.height;
+    const ctx = canvas.getContext('2d');
+
+    if (ctx) {
+      ctx.drawImage(
+        imgRef.current,
+        completedCrop.x * scaleX,
+        completedCrop.y * scaleY,
+        completedCrop.width * scaleX,
+        completedCrop.height * scaleY,
+        0,
+        0,
+        completedCrop.width,
+        completedCrop.height
+      );
+
+      canvas.toBlob((blob) => {
+        if (blob) {
+          setFinalPhotoBlob(blob);
+          setPhotoPreview(URL.createObjectURL(blob));
+          setIsCropping(false);
+        }
+      }, 'image/jpeg');
+    }
+  }, [completedCrop]);
 
   const nextStep = async () => {
     let fieldsToValidate: (keyof AdmissionFormData)[] = [];
     if (step === 1) fieldsToValidate = ["firstName", "lastName", "dob", "gender"];
     if (step === 2) fieldsToValidate = ["grade", "section", "admissionDate"];
-    if (step === 3) fieldsToValidate = ["guardianName", "guardianPhone", "guardianCnic", "homeAddress"];
+    if (step === 3) fieldsToValidate = ["guardianName", "guardianPhone", "homeAddress"];
 
     const isValid = await trigger(fieldsToValidate);
     if (isValid) setStep(prev => prev + 1);
@@ -99,20 +160,9 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
 
   const prevStep = () => setStep(prev => prev - 1);
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setPhotoFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => setPhotoPreview(reader.result as string);
-      reader.readAsDataURL(file);
-    }
-  };
-
   const onSubmit = async (data: AdmissionFormData) => {
     setIsSubmitting(true);
     try {
-      // 1. Generate a professional unique Student ID
       const year = new Date().getFullYear();
       const studentsRef = collection(db, 'students');
       const q = query(studentsRef, where('school_id', '==', schoolId));
@@ -122,41 +172,54 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
       
       let photoUrl = "";
 
-      // 2. Upload Photo if exists
-      if (photoFile) {
+      if (finalPhotoBlob) {
         const storageRef = ref(storage, `schools/${schoolId}/students/${studentId}/profile.jpg`);
-        const snapshot = await uploadBytes(storageRef, photoFile);
+        const snapshot = await uploadBytes(storageRef, finalPhotoBlob);
         photoUrl = await getDownloadURL(snapshot.ref);
       }
 
-      // 3. Save to Firestore
       await addDoc(collection(db, 'students'), {
         student_id: studentId,
         school_id: schoolId,
         personal_info: {
           firstName: data.firstName,
           lastName: data.lastName,
-          dob: data.dob,
+          dateOfBirth: data.dob,
           gender: data.gender,
           bloodGroup: data.bloodGroup,
+          cnic_bform: data.cnic_bform,
+          religion: data.religion,
+          nationality: data.nationality,
+          medical_history: data.medicalHistory,
           photoUrl
         },
         academic_info: {
           grade: data.grade,
           section: data.section,
           rollNumber: data.rollNumber,
-          previousSchool: data.previousSchool
+          previousSchool: data.previousSchool,
+          house: data.house,
+          admissionYear: year.toString(),
+          clubs: data.clubs ? data.clubs.split(',').map(c => c.trim()) : []
         },
         guardian_info: {
           name: data.guardianName,
+          relationship: data.guardianRelation,
           phone: data.guardianPhone,
           email: data.guardianEmail,
-          cnic: data.guardianCnic,
+          occupation: data.guardianOccupation,
           address: data.homeAddress
         },
         status: 'active',
         admission_date: data.admissionDate,
-        created_at: serverTimestamp()
+        created_at: serverTimestamp(),
+        timeline: [{
+          event: 'Admission Completed',
+          date: Timestamp.now(),
+          type: 'Academic',
+          details: `Student admitted to Class ${data.grade} - ${data.section}`
+        }],
+        behavior_stats: { merits: 0, demerits: 0 }
       });
 
       toast.success("Student admitted successfully!");
@@ -169,313 +232,6 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
     }
   };
 
-  const renderStep = () => {
-    switch (step) {
-      case 1:
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="space-y-6"
-          >
-            <div className="flex flex-col items-center mb-8">
-              <div className="relative group">
-                <div className="w-32 h-32 rounded-2xl border-2 border-dashed border-gray-700 flex items-center justify-center bg-cyber-gray/50 overflow-hidden group-hover:border-neon-indigo transition-colors">
-                  {photoPreview ? (
-                    <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
-                  ) : (
-                    <Upload className="text-gray-600 group-hover:text-neon-indigo" size={32} />
-                  )}
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    onChange={handlePhotoChange}
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                  />
-                </div>
-                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mt-2 text-center">Profile Photo</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">First Name</label>
-                <input 
-                  {...register("firstName")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. Ahmed"
-                />
-                {errors.firstName && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.firstName.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Last Name</label>
-                <input 
-                  {...register("lastName")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. Khan"
-                />
-                {errors.lastName && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.lastName.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Date of Birth</label>
-                <input 
-                  type="date"
-                  {...register("dob")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                />
-                {errors.dob && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.dob.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Gender</label>
-                <select 
-                  {...register("gender")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors appearance-none"
-                >
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Blood Group</label>
-                <select 
-                  {...register("bloodGroup")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors appearance-none"
-                >
-                  <option value="">Select Blood Group</option>
-                  <option value="A+">A+</option>
-                  <option value="A-">A-</option>
-                  <option value="B+">B+</option>
-                  <option value="B-">B-</option>
-                  <option value="O+">O+</option>
-                  <option value="O-">O-</option>
-                  <option value="AB+">AB+</option>
-                  <option value="AB-">AB-</option>
-                </select>
-              </div>
-            </div>
-          </motion.div>
-        );
-      case 2:
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="space-y-6"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Admission Date</label>
-                <input 
-                  type="date"
-                  {...register("admissionDate")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Class / Grade</label>
-                <select 
-                  {...register("grade")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors appearance-none"
-                >
-                  <option value="">Select Grade</option>
-                  <option value="Nursery">Nursery</option>
-                  <option value="KG">KG</option>
-                  <option value="Class 1">Class 1</option>
-                  <option value="Class 2">Class 2</option>
-                  <option value="Class 3">Class 3</option>
-                  <option value="Class 4">Class 4</option>
-                  <option value="Class 5">Class 5</option>
-                  <option value="Class 6">Class 6</option>
-                  <option value="Class 7">Class 7</option>
-                  <option value="Class 8">Class 8</option>
-                  <option value="Class 9">Class 9</option>
-                  <option value="Class 10">Class 10</option>
-                </select>
-                {errors.grade && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.grade.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Section</label>
-                <select 
-                  {...register("section")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors appearance-none"
-                >
-                  <option value="">Select Section</option>
-                  <option value="A">Section A</option>
-                  <option value="B">Section B</option>
-                  <option value="C">Section C</option>
-                  <option value="Blue">Blue</option>
-                  <option value="Green">Green</option>
-                </select>
-                {errors.section && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.section.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Roll Number</label>
-                <input 
-                  {...register("rollNumber")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. 2024-001"
-                />
-              </div>
-              <div className="md:col-span-2 space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Previous School Name (Optional)</label>
-                <input 
-                  {...register("previousSchool")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. Beaconhouse School System"
-                />
-              </div>
-            </div>
-          </motion.div>
-        );
-      case 3:
-        return (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="space-y-6"
-          >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Father's / Guardian's Name</label>
-                <input 
-                  {...register("guardianName")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. Muhammad Khan"
-                />
-                {errors.guardianName && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.guardianName.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Contact Number</label>
-                <input 
-                  {...register("guardianPhone")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. +923001234567"
-                />
-                {errors.guardianPhone && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.guardianPhone.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Email Address (Optional)</label>
-                <input 
-                  {...register("guardianEmail")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. guardian@example.com"
-                />
-                {errors.guardianEmail && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.guardianEmail.message}</p>}
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">CNIC / National ID</label>
-                <input 
-                  {...register("guardianCnic")}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors"
-                  placeholder="e.g. 42101-1234567-1"
-                />
-                {errors.guardianCnic && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.guardianCnic.message}</p>}
-              </div>
-              <div className="md:col-span-2 space-y-1">
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Home Address</label>
-                <textarea 
-                  {...register("homeAddress")}
-                  rows={3}
-                  className="w-full bg-cyber-gray/50 border border-white/5 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-neon-indigo transition-colors resize-none"
-                  placeholder="e.g. House #123, Street #4, Sector F-10, Islamabad"
-                />
-                {errors.homeAddress && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.homeAddress.message}</p>}
-              </div>
-            </div>
-          </motion.div>
-        );
-      case 4:
-        const values = getValues();
-        return (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="space-y-8"
-          >
-            <div className="bg-neon-indigo/5 border border-neon-indigo/20 p-6 rounded-2xl">
-              <h4 className="text-neon-indigo font-black uppercase tracking-widest text-xs mb-4 flex items-center gap-2">
-                <User size={14} /> Personal Summary
-              </h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Name</p>
-                  <p className="text-white font-bold">{values.firstName} {values.lastName}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">DOB</p>
-                  <p className="text-white font-bold">{values.dob}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Gender</p>
-                  <p className="text-white font-bold capitalize">{values.gender}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Blood</p>
-                  <p className="text-white font-bold">{values.bloodGroup || 'N/A'}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 p-6 rounded-2xl">
-              <h4 className="text-gray-400 font-black uppercase tracking-widest text-xs mb-4 flex items-center gap-2">
-                <BookOpen size={14} /> Academic Summary
-              </h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Grade</p>
-                  <p className="text-white font-bold">{values.grade}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Section</p>
-                  <p className="text-white font-bold">{values.section}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Roll #</p>
-                  <p className="text-white font-bold">{values.rollNumber || 'TBD'}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Admission</p>
-                  <p className="text-white font-bold">{values.admissionDate}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white/5 border border-white/10 p-6 rounded-2xl">
-              <h4 className="text-gray-400 font-black uppercase tracking-widest text-xs mb-4 flex items-center gap-2">
-                <Users size={14} /> Guardian Summary
-              </h4>
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  <div>
-                    <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Guardian</p>
-                    <p className="text-white font-bold">{values.guardianName}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Phone</p>
-                    <p className="text-white font-bold">{values.guardianPhone}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">CNIC</p>
-                    <p className="text-white font-bold">{values.guardianCnic}</p>
-                  </div>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Address</p>
-                  <p className="text-white font-bold">{values.homeAddress}</p>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        );
-      default:
-        return null;
-    }
-  };
-
   const steps = [
     { id: 1, label: 'Personal', icon: User },
     { id: 2, label: 'Academic', icon: BookOpen },
@@ -484,22 +240,33 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
   ];
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Stepper Header */}
-      <div className="flex items-center justify-between mb-12 relative">
-        <div className="absolute top-1/2 left-0 w-full h-[1px] bg-white/5 -z-10" />
+    <div className="max-w-5xl mx-auto font-['Plus_Jakarta_Sans'] bg-slate-50 min-h-screen p-4 md:p-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-12">
+        <div>
+          <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Student <span className="text-slate-400">Admission</span></h2>
+          <p className="text-slate-500 font-medium text-sm mt-1">Complete the multi-step form to register a new student.</p>
+        </div>
+        <button onClick={onCancel} className="p-3 bg-white rounded-2xl text-slate-400 hover:text-slate-900 transition-all border border-slate-200 shadow-sm">
+          <X size={24} />
+        </button>
+      </div>
+
+      {/* Stepper */}
+      <div className="flex items-center justify-between mb-12 relative px-4">
+        <div className="absolute top-1/2 left-0 w-full h-[2px] bg-slate-200 -z-10" />
         {steps.map((s) => (
           <div key={s.id} className="flex flex-col items-center gap-3">
             <div 
-              className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-500 border ${
+              className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-500 border-2 ${
                 step >= s.id 
-                  ? 'bg-neon-indigo text-white border-neon-indigo shadow-[0_0_20px_rgba(99,102,241,0.3)]' 
-                  : 'bg-cyber-gray text-gray-600 border-white/5'
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-900/20' 
+                  : 'bg-white text-slate-300 border-slate-200'
               }`}
             >
-              <s.icon size={20} />
+              <s.icon size={24} />
             </div>
-            <span className={`text-[10px] font-black uppercase tracking-widest ${step >= s.id ? 'text-neon-indigo' : 'text-gray-600'}`}>
+            <span className={`text-[10px] font-black uppercase tracking-widest ${step >= s.id ? 'text-slate-900' : 'text-slate-400'}`}>
               {s.label}
             </span>
           </div>
@@ -507,18 +274,232 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
       </div>
 
       {/* Form Content */}
-      <div className="bg-cyber-gray/40 backdrop-blur-xl border border-white/5 p-8 md:p-12 rounded-[2rem] neon-border-indigo/20 min-h-[500px] flex flex-col">
+      <div className="bg-white border border-slate-200 p-8 md:p-16 rounded-[3rem] shadow-sm min-h-[600px] flex flex-col">
         <div className="flex-grow">
           <AnimatePresence mode="wait">
-            {renderStep()}
+            {step === 1 && (
+              <motion.div 
+                key="step1"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-10"
+              >
+                <div className="flex flex-col items-center">
+                  <div className="relative group">
+                    <div className="w-40 h-40 rounded-[2.5rem] border-2 border-dashed border-slate-200 flex items-center justify-center bg-slate-50 overflow-hidden group-hover:border-slate-900 transition-colors">
+                      {photoPreview ? (
+                        <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
+                      ) : (
+                        <Camera className="text-slate-300 group-hover:text-slate-900" size={40} />
+                      )}
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={onSelectFile}
+                        className="absolute inset-0 opacity-0 cursor-pointer"
+                      />
+                    </div>
+                    <div className="absolute -bottom-2 -right-2 p-3 bg-slate-900 text-white rounded-2xl shadow-xl">
+                      <Upload size={16} />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-4">Profile Photo Upload</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">First Name</label>
+                    <input {...register("firstName")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="Ahmed" />
+                    {errors.firstName && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.firstName.message}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Last Name</label>
+                    <input {...register("lastName")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="Khan" />
+                    {errors.lastName && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.lastName.message}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Date of Birth</label>
+                    <input type="date" {...register("dob")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Gender</label>
+                    <select {...register("gender")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all appearance-none">
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Blood Group</label>
+                    <select {...register("bloodGroup")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all appearance-none">
+                      <option value="">Select</option>
+                      {['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'].map(bg => <option key={bg} value={bg}>{bg}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">CNIC / B-Form</label>
+                    <input {...register("cnic_bform")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="42101-XXXXXXX-X" />
+                  </div>
+                  <div className="md:col-span-3 space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Medical History / Allergies</label>
+                    <textarea {...register("medicalHistory")} rows={2} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all resize-none" placeholder="e.g. Peanut allergy, Asthma..." />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 2 && (
+              <motion.div 
+                key="step2"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-10"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Admission Date</label>
+                    <input type="date" {...register("admissionDate")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Class / Grade</label>
+                    <select {...register("grade")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all appearance-none">
+                      <option value="">Select Grade</option>
+                      {['Nursery', 'KG', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'].map(c => <option key={c} value={c}>Class {c}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Section</label>
+                    <input {...register("section")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="e.g. A, Blue, Rose" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Roll Number</label>
+                    <input {...register("rollNumber")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="e.g. 2026-001" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">House System</label>
+                    <select {...register("house")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all appearance-none">
+                      <option value="">Select House</option>
+                      <option value="Jinnah">Jinnah (Blue)</option>
+                      <option value="Iqbal">Iqbal (Green)</option>
+                      <option value="Liaquat">Liaquat (Red)</option>
+                      <option value="Sir Syed">Sir Syed (Yellow)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Previous School</label>
+                    <input {...register("previousSchool")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="e.g. City School" />
+                  </div>
+                  <div className="md:col-span-2 space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Clubs / Societies (Comma separated)</label>
+                    <input {...register("clubs")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="e.g. Robotics, Debate, Sports" />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 3 && (
+              <motion.div 
+                key="step3"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="space-y-10"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Guardian Name</label>
+                    <input {...register("guardianName")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="Muhammad Khan" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Relationship</label>
+                    <select {...register("guardianRelation")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all appearance-none">
+                      <option value="Father">Father</option>
+                      <option value="Mother">Mother</option>
+                      <option value="Brother">Brother</option>
+                      <option value="Sister">Sister</option>
+                      <option value="Uncle">Uncle</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Phone Number</label>
+                    <input {...register("guardianPhone")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="+923001234567" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Email Address</label>
+                    <input {...register("guardianEmail")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="guardian@example.com" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Occupation</label>
+                    <input {...register("guardianOccupation")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="e.g. Engineer, Doctor" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">National ID (CNIC)</label>
+                    <input {...register("guardianCnic")} className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all" placeholder="42101-XXXXXXX-X" />
+                  </div>
+                  <div className="md:col-span-2 space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Residential Address</label>
+                    <textarea 
+                      {...register("homeAddress")} 
+                      rows={4} 
+                      className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 focus:border-slate-900 outline-none transition-all min-h-[120px] resize-y" 
+                      placeholder="Enter full residential address (House #, Street, Area, City)..." 
+                    />
+                    {errors.homeAddress && <p className="text-red-500 text-[10px] font-bold uppercase mt-1">{errors.homeAddress.message}</p>}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 4 && (
+              <motion.div 
+                key="step4"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="space-y-8"
+              >
+                <div className="bg-slate-50 border border-slate-200 p-8 rounded-3xl">
+                   <div className="flex items-center gap-6">
+                      <div className="w-24 h-24 rounded-2xl bg-white border border-slate-200 overflow-hidden shadow-sm">
+                        {photoPreview ? <img src={photoPreview} className="w-full h-full object-cover" /> : <User size={40} className="text-slate-200 m-auto mt-6" />}
+                      </div>
+                      <div>
+                        <h4 className="text-2xl font-bold text-slate-900 tracking-tight">{getValues().firstName} {getValues().lastName}</h4>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Class {getValues().grade} - {getValues().section}</p>
+                      </div>
+                   </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                   <div className="p-6 bg-slate-50 border border-slate-200 rounded-3xl">
+                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Personal Details</h5>
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">DOB:</span> {getValues().dob}</p>
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">Gender:</span> {getValues().gender}</p>
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">CNIC:</span> {getValues().cnic_bform || 'N/A'}</p>
+                      </div>
+                   </div>
+                   <div className="p-6 bg-slate-50 border border-slate-200 rounded-3xl">
+                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Guardian Details</h5>
+                      <div className="space-y-3">
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">Name:</span> {getValues().guardianName}</p>
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">Phone:</span> {getValues().guardianPhone}</p>
+                        <p className="text-xs text-slate-900"><span className="text-slate-400 font-bold">Address:</span> {getValues().homeAddress}</p>
+                      </div>
+                   </div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
 
-        {/* Navigation Buttons */}
-        <div className="flex items-center justify-between mt-12 pt-8 border-t border-white/5">
+        {/* Navigation */}
+        <div className="flex items-center justify-between mt-12 pt-10 border-t border-slate-100">
           <button 
             onClick={step === 1 ? onCancel : prevStep}
-            className="flex items-center gap-2 text-gray-500 hover:text-white font-black uppercase tracking-widest text-[10px] transition-colors"
+            className="flex items-center gap-2 text-slate-400 hover:text-slate-900 font-bold uppercase tracking-widest text-[10px] transition-all"
           >
             <ChevronLeft size={16} /> {step === 1 ? 'Cancel' : 'Previous'}
           </button>
@@ -526,7 +507,7 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
           {step < 4 ? (
             <button 
               onClick={nextStep}
-              className="bg-neon-indigo text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:shadow-[0_0_30px_rgba(99,102,241,0.4)] transition-all active:scale-95"
+              className="bg-slate-900 text-white px-10 py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20"
             >
               Next Step <ChevronRight size={16} />
             </button>
@@ -534,17 +515,53 @@ const StudentAdmissionWizard: React.FC<StudentAdmissionWizardProps> = ({ schoolI
             <button 
               onClick={handleSubmit(onSubmit)}
               disabled={isSubmitting}
-              className="bg-neon-indigo text-white px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:shadow-[0_0_30px_rgba(99,102,241,0.4)] transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-slate-900 text-white px-12 py-4 rounded-2xl font-bold uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/20 disabled:opacity-50"
             >
-              {isSubmitting ? (
-                <>Processing <Loader2 className="animate-spin" size={16} /></>
-              ) : (
-                <>Confirm Admission <ArrowRight size={16} /></>
-              )}
+              {isSubmitting ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle size={16} />}
+              {isSubmitting ? 'Processing...' : 'Confirm Admission'}
             </button>
           )}
         </div>
       </div>
+
+      {/* Cropper Modal */}
+      <AnimatePresence>
+        {isCropping && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-[3rem] p-10 overflow-hidden shadow-2xl">
+              <h3 className="text-xl font-bold text-slate-900 tracking-tight mb-8">Crop Profile Photo</h3>
+              
+              <div className="max-h-[50vh] overflow-auto mb-8 rounded-2xl border border-slate-200">
+                <ReactCrop
+                  crop={crop}
+                  onChange={(c) => setCrop(c)}
+                  onComplete={(c) => setCompletedCrop(c)}
+                  aspect={1}
+                  circularCrop
+                >
+                  <img ref={imgRef} src={imgSrc} alt="Crop me" onLoad={onImageLoad} className="max-w-full" />
+                </ReactCrop>
+              </div>
+
+              <div className="flex justify-end gap-4">
+                <button 
+                  onClick={() => setIsCropping(false)}
+                  className="px-6 py-3 text-[10px] font-black uppercase text-slate-400"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={getCroppedImg}
+                  className="px-10 py-3 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-slate-900/20"
+                >
+                  Apply Crop
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

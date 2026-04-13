@@ -9,6 +9,11 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
+    match /system/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+
     // ===============================================================
     // Helper Functions
     // ===============================================================
@@ -67,16 +72,42 @@ service cloud.firestore {
     }
 
     function isValidStaff(data) {
-      return data.staff_id is string &&
+      return data.id is string &&
              data.school_id is string &&
              data.name is string &&
              data.designation is string &&
              data.department is string &&
-             data.is_active is bool &&
+             data.status in ['active', 'on-leave', 'resigned', 'terminated'] &&
              (!('payroll' in data) || (
                data.payroll is map &&
-               (!('leave_balances' in data.payroll) || data.payroll.leave_balances is map)
+               data.payroll.base_salary is number &&
+               data.payroll.allowances is number &&
+               data.payroll.deductions is number
              ));
+    }
+
+    function isValidStaffAttendance(data) {
+      return data.school_id is string &&
+             data.staff_id is string &&
+             data.date is string &&
+             data.status in ['present', 'absent', 'late', 'short-leave'];
+    }
+
+    function isValidStudent(data) {
+      return data.student_id is string &&
+             data.school_id is string &&
+             data.personal_info is map &&
+             data.academic_info is map &&
+             data.guardian_info is map &&
+             data.status in ['active', 'inactive', 'suspended', 'withdrawn', 'alumni'];
+    }
+
+    function isValidAuditLog(data) {
+      return data.school_id is string &&
+             data.actor_uid is string &&
+             data.action_type is string &&
+             data.resource is string &&
+             data.timestamp is timestamp;
     }
 
     function isValidExam(data) {
@@ -166,6 +197,104 @@ service cloud.firestore {
         );
         allow write: if isAuthenticated() && (isSuperAdmin() || get(/databases/$(database)/documents/schools/$(schoolId)).data.adminUid == request.auth.uid);
       }
+
+      match /config/{docId} {
+        allow read: if isAuthenticated() && (
+          isSuperAdmin() || 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId
+        );
+        allow write: if isAuthenticated() && (
+          isSuperAdmin() || 
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+        );
+      }
+
+      match /resources/{docId} {
+        allow read: if isAuthenticated() && (
+          isSuperAdmin() || 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId
+        );
+        allow write: if isAuthenticated() && (
+          isSuperAdmin() || 
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['school_admin', 'teacher'])
+        );
+      }
+
+      match /attendance/{docId} {
+        allow read: if isAuthenticated() && (
+          isSuperAdmin() || 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId
+        );
+        allow write: if isAuthenticated() && (
+          isSuperAdmin() || 
+          (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId == schoolId && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['school_admin', 'teacher'])
+        );
+      }
+    }
+
+    match /fee_vouchers/{voucherId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId ||
+        resource.data.studentId == get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.student_uid ||
+        get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parent_uid == request.auth.uid
+      );
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (request.resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+      );
+    }
+
+    match /fee_heads/{headId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (request.resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+      );
+    }
+
+    match /fee_groups/{groupId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (request.resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+      );
+    }
+
+    match /fee_discounts/{discountId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (request.resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+      );
+    }
+
+    match /school_expenses/{expenseId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() || 
+        (request.resource.data.schoolId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin')
+      );
     }
 
     match /students/{studentId} {
@@ -175,16 +304,28 @@ service cloud.firestore {
         resource.data.parent_uid == request.auth.uid ||
         resource.data.student_uid == request.auth.uid
       );
-      allow create: if isAuthenticated() && (
+      allow create: if isAuthenticated() && isValidStudent(request.resource.data) && (
         isSuperAdmin() || 
         request.resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
       );
-      allow update: if isAuthenticated() && (
+      allow update: if isAuthenticated() && isValidStudent(request.resource.data) && (
         isSuperAdmin() || 
         resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId ||
         resource.data.student_uid == request.auth.uid
       );
       allow delete: if isSuperAdmin();
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data) && (
+        isSuperAdmin() || 
+        request.resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow update, delete: if false;
     }
 
     match /support_tickets/{ticketId} {
@@ -199,11 +340,7 @@ service cloud.firestore {
     }
 
     match /global_announcements/{announcementId} {
-      allow read: if isAuthenticated() && (
-        isSuperAdmin() || 
-        (resource.data.expires_at > request.time && 
-         (resource.data.target_audience == 'all' || resource.data.target_audience == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId))
-      );
+      allow read: if isAuthenticated();
       allow write: if isSuperAdmin();
     }
 
@@ -262,6 +399,18 @@ service cloud.firestore {
         resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
       );
       allow create, update: if isAuthenticated() && isValidStaff(request.resource.data) && (
+        isSuperAdmin() || 
+        request.resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    match /staff_attendance/{attendanceId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() || 
+        resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
+      );
+      allow create, update: if isAuthenticated() && isValidStaffAttendance(request.resource.data) && (
         isSuperAdmin() || 
         request.resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
       );
@@ -329,10 +478,7 @@ service cloud.firestore {
     }
 
     match /announcements/{announcementId} {
-      allow read: if isAuthenticated() && (
-        isSuperAdmin() || 
-        resource.data.school_id == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.schoolId
-      );
+      allow read: if isAuthenticated();
       allow write: if isAuthenticated() && (
         isSuperAdmin() || 
         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'school_admin' &&

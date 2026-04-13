@@ -145,10 +145,37 @@ const TeacherAttendanceModule: React.FC<{ userProfile: any; onBack: () => void }
     }
   };
 
-  const updateStatus = (studentId: string, status: 'P' | 'A' | 'L') => {
-    setRoster(prev => prev.map(entry => 
+  const updateStatus = async (studentId: string, status: 'P' | 'A' | 'L') => {
+    // 1. Optimistic Update
+    const oldRoster = [...roster];
+    const newRoster = roster.map(entry => 
       entry.student_id === studentId ? { ...entry, status } : entry
-    ));
+    );
+    setRoster(newRoster);
+
+    // 2. Background Save
+    if (!selectedClass) return;
+    
+    try {
+      const docId = `${userProfile.schoolId}_${selectedDate}_${selectedClass.class}_${selectedClass.section}`;
+      const record: AttendanceRecord = {
+        school_id: userProfile.schoolId,
+        date: selectedDate,
+        class: selectedClass.class,
+        section: selectedClass.section,
+        marked_by_uid: userProfile.uid,
+        created_at: serverTimestamp(),
+        records: newRoster
+      };
+
+      await setDoc(doc(db, 'attendance_records', docId), record);
+      // No toast here to keep it "silent" and fast
+    } catch (error) {
+      console.error("Error background saving attendance:", error);
+      // Rollback on error
+      setRoster(oldRoster);
+      toast.error("Sync failed. Reverting changes.");
+    }
   };
 
   const saveAttendance = async () => {
@@ -168,7 +195,7 @@ const TeacherAttendanceModule: React.FC<{ userProfile: any; onBack: () => void }
       };
 
       await setDoc(doc(db, 'attendance_records', docId), record);
-      toast.success("Attendance saved successfully!");
+      toast.success("All attendance records synchronized!");
     } catch (error) {
       console.error("Error saving attendance:", error);
       toast.error("Failed to save attendance");

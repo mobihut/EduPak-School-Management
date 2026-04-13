@@ -140,20 +140,28 @@ import {
 } from 'lucide-react';
 import { auth, db, storage, secondaryAuth } from './firebase';
 import StudentAdmissionWizard from './components/StudentAdmissionWizard';
+import StudentManagement from './components/StudentManagement';
+import AttendanceManagement from './components/AttendanceManagement';
 import IDCardGenerator from './components/IDCardGenerator';
 import FeeCollectionModule from './components/FeeCollectionModule';
-import StudentAttendanceModule from './components/StudentAttendanceModule';
 import TeacherHRManagement from './components/TeacherHRManagement';
 import ExamsResultsManagement from './components/ExamsResultsManagement';
 import TimetableBuilder from './components/TimetableBuilder';
 import TeacherPortalDashboard from './components/TeacherPortalDashboard';
 import AdminLeaveApprovalModule from './components/AdminLeaveApprovalModule';
 import ParentPortalDashboard from './components/ParentPortalDashboard';
+import ParentPortalManagement from './components/ParentPortalManagement';
+import TeacherPortalManagement from './components/TeacherPortalManagement';
 import LandingPage from './components/LandingPage';
 import SchoolOnboardingWizard from './components/SchoolOnboardingWizard';
 import StudentPortalDashboard from './components/StudentPortalDashboard';
 import FinancialReportsModule from './components/FinancialReportsModule';
 import MarketingAnalyticsModule from './components/MarketingAnalyticsModule';
+import IntegrationHub from './components/IntegrationHub';
+import SchoolSettingsModule from './components/SchoolSettingsModule';
+import SchoolAdminRolesManagement from './components/SchoolAdminRolesManagement';
+import CommunicationHub from './components/CommunicationHub';
+import AcademicClassesManagement from './components/AcademicClassesManagement';
 import { QRCodeSVG } from 'qrcode.react';
 import xlsx from 'json-as-xlsx';
 import { jsPDF } from 'jspdf';
@@ -7574,303 +7582,6 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
   };
 
   // --- School Admin Portal Components ---
-  const SchoolAdminRolesManagement = ({ schoolId }: { schoolId: string }) => {
-    const [activeSubTab, setActiveSubTab] = useState<'staff' | 'roles'>('staff');
-    const [staff, setStaff] = useState<UserProfile[]>([]);
-    const [roles, setRoles] = useState<AdminRole[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-    const [isRoleModalOpen, setIsRoleModalOpen] = useState(false);
-    const [inviteData, setInviteData] = useState({ email: '', password: '', role: '', name: '' });
-    const [newRoleData, setNewRoleData] = useState<AdminRole>({
-      id: '',
-      role_name: '',
-      permissions: {},
-      school_id: schoolId
-    });
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState('');
-
-    const schoolModules = [
-      { id: 'students', label: 'Student Management' },
-      { id: 'attendance', label: 'Attendance' },
-      { id: 'teachers', label: 'HR & Teachers' },
-      { id: 'academics', label: 'Academics' },
-      { id: 'fees', label: 'Fee Collection' },
-      { id: 'exams', label: 'Exams & Results' },
-      { id: 'timetable', label: 'Timetable' },
-      { id: 'communication', label: 'Communication' },
-      { id: 'settings', label: 'School Settings' },
-    ];
-
-    const actions: ('view' | 'create' | 'edit' | 'delete')[] = ['view', 'create', 'edit', 'delete'];
-
-    useEffect(() => {
-      const staffUnsub = onSnapshot(
-        query(collection(db, 'users'), where('schoolId', '==', schoolId)),
-        (snap) => {
-          setStaff(snap.docs.map(doc => ({ ...doc.data(), uid: doc.id } as UserProfile)));
-        }
-      );
-
-      const rolesUnsub = onSnapshot(
-        query(collection(db, 'admin_roles'), where('school_id', '==', schoolId)),
-        (snap) => {
-          setRoles(snap.docs.map(doc => ({ ...doc.data(), id: doc.id } as AdminRole)));
-          setLoading(false);
-        }
-      );
-
-      return () => {
-        staffUnsub();
-        rolesUnsub();
-      };
-    }, [schoolId]);
-
-    const handleInviteStaff = async (e: React.FormEvent) => {
-      e.preventDefault();
-      setSubmitting(true);
-      setError('');
-      try {
-        const response = await fetch('/api/admin/invite-staff', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...inviteData, schoolId, adminUid: userProfile.uid })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
-        setIsInviteModalOpen(false);
-        setInviteData({ email: '', password: '', role: '', name: '' });
-        toast.success("Staff invited successfully");
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setSubmitting(false);
-      }
-    };
-
-    const handleCreateRole = async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (!newRoleData.role_name) return;
-      setSubmitting(true);
-      setError('');
-      try {
-        const roleId = `role_${schoolId}_${newRoleData.role_name.toLowerCase().replace(/\s+/g, '_')}`;
-        await setDoc(doc(db, 'admin_roles', roleId), { ...newRoleData, id: roleId, school_id: schoolId });
-        setIsRoleModalOpen(false);
-        setNewRoleData({
-          id: '',
-          role_name: '',
-          permissions: {},
-          school_id: schoolId
-        });
-        toast.success("Role created successfully");
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setSubmitting(false);
-      }
-    };
-
-    const togglePermission = (module: string, action: 'view' | 'create' | 'edit' | 'delete') => {
-      setNewRoleData(prev => {
-        const current = prev.permissions[module] || [];
-        const updated = current.includes(action) 
-          ? current.filter(a => a !== action)
-          : [...current, action];
-        return {
-          ...prev,
-          permissions: {
-            ...prev.permissions,
-            [module]: updated
-          }
-        };
-      });
-    };
-
-    if (loading) return <div className="flex justify-center p-12"><Loader2 className="animate-spin text-neon-blue" size={32} /></div>;
-
-    return (
-      <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-4 p-1 bg-cyber-black/50 rounded-xl border border-white/5">
-            <button 
-              onClick={() => setActiveSubTab('staff')}
-              className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'staff' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]' : 'text-gray-500 hover:text-white'}`}
-            >
-              Staff Directory
-            </button>
-            <button 
-              onClick={() => setActiveSubTab('roles')}
-              className={`px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${activeSubTab === 'roles' ? 'bg-neon-blue text-black shadow-[0_0_15px_rgba(0,243,255,0.3)]' : 'text-gray-500 hover:text-white'}`}
-            >
-              Role Definitions
-            </button>
-          </div>
-          <button 
-            onClick={() => activeSubTab === 'staff' ? setIsInviteModalOpen(true) : setIsRoleModalOpen(true)}
-            className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-neon-blue text-[10px] font-black uppercase tracking-widest transition-all"
-          >
-            <Plus size={16} />
-            {activeSubTab === 'staff' ? 'Invite Staff' : 'Create Role'}
-          </button>
-        </div>
-
-        {activeSubTab === 'staff' ? (
-          <div className="bg-cyber-gray/40 backdrop-blur-md rounded-2xl border border-white/5 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-cyber-black/50 border-b border-white/5">
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Name</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Email</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Role</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Status</th>
-                    <th className="px-6 py-4 text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {staff.map((member) => (
-                    <tr key={member.uid} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-6 py-4">
-                        <p className="text-sm font-bold text-white">{member.name}</p>
-                      </td>
-                      <td className="px-6 py-4 text-xs text-gray-400">{member.email}</td>
-                      <td className="px-6 py-4">
-                        <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-neon-blue/10 text-neon-blue border border-neon-blue/20">
-                          {member.role.replace('_', ' ')}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${member.status === 'active' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
-                          {member.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex gap-2">
-                          <button className="p-2 text-gray-500 hover:text-neon-blue transition-colors"><Settings size={16} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            <div className="lg:col-span-1 space-y-4">
-              <h3 className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-4">Custom Roles</h3>
-              {roles.map(role => (
-                <button 
-                  key={role.id}
-                  onClick={() => setNewRoleData(role)}
-                  className={`w-full text-left p-4 bg-cyber-gray/40 border rounded-2xl hover:neon-border-blue transition-all group ${newRoleData.id === role.id ? 'neon-border-blue' : 'border-white/5'}`}
-                >
-                  <p className="text-sm font-bold text-white group-hover:text-neon-blue transition-colors">{role.role_name}</p>
-                  <p className="text-[9px] text-gray-500 uppercase tracking-widest mt-1">
-                    {Object.values(role.permissions).flat().length} Permissions
-                  </p>
-                </button>
-              ))}
-            </div>
-
-            <div className="lg:col-span-3 bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5">
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-xl font-black text-white uppercase tracking-tighter">Permissions Matrix</h3>
-                <span className="text-[10px] font-black text-neon-blue uppercase tracking-widest bg-neon-blue/10 px-3 py-1 rounded-full border border-neon-blue/20">Granular Access Control</span>
-              </div>
-
-              <div className="space-y-6">
-                <div className="grid grid-cols-5 gap-4 border-b border-white/5 pb-4">
-                  <div className="col-span-1 text-[10px] font-black text-gray-600 uppercase tracking-widest">Module</div>
-                  {actions.map(a => (
-                    <div key={a} className="text-center text-[10px] font-black text-gray-600 uppercase tracking-widest">{a}</div>
-                  ))}
-                </div>
-
-                {schoolModules.map(mod => (
-                  <div key={mod.id} className="grid grid-cols-5 gap-4 items-center py-4 border-b border-white/5 last:border-0 group">
-                    <div className="col-span-1">
-                      <p className="text-sm font-bold text-white group-hover:text-neon-blue transition-colors">{mod.label}</p>
-                    </div>
-                    {actions.map(action => (
-                      <div key={action} className="flex justify-center">
-                        <button 
-                          onClick={() => togglePermission(mod.id, action)}
-                          className={`w-6 h-6 rounded-md border transition-all flex items-center justify-center ${
-                            newRoleData.permissions[mod.id]?.includes(action)
-                            ? 'bg-neon-blue border-neon-blue text-black shadow-[0_0_10px_#00f3ff]'
-                            : 'bg-cyber-black border-white/10 text-transparent hover:border-neon-blue/50'
-                          }`}
-                        >
-                          <CheckCircle size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-10 pt-8 border-t border-white/5 flex justify-end">
-                <NeonButton onClick={handleCreateRole} loading={submitting} className="max-w-xs">Save Role Configuration</NeonButton>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Invite Staff Modal */}
-        <AnimatePresence>
-          {isInviteModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsInviteModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-cyber-gray p-8 rounded-3xl neon-border-blue w-full max-w-md">
-                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Invite Staff</h3>
-                <form onSubmit={handleInviteStaff} className="space-y-4">
-                  <NeonInput icon={UserIcon} placeholder="Full Name" required value={inviteData.name} onChange={(e: any) => setInviteData({...inviteData, name: e.target.value})} />
-                  <NeonInput icon={Mail} type="email" placeholder="Email Address" required value={inviteData.email} onChange={(e: any) => setInviteData({...inviteData, email: e.target.value})} />
-                  <NeonInput icon={Lock} type="password" placeholder="Temporary Password" required value={inviteData.password} onChange={(e: any) => setInviteData({...inviteData, password: e.target.value})} />
-                  <select 
-                    required 
-                    value={inviteData.role} 
-                    onChange={(e) => setInviteData({...inviteData, role: e.target.value})}
-                    className="w-full bg-cyber-black/50 border border-white/10 rounded-xl py-3 px-4 text-white text-sm focus:neon-border-blue outline-none transition-all"
-                  >
-                    <option value="" disabled>Select Role</option>
-                    <option value="school_admin">School Admin</option>
-                    <option value="teacher">Teacher</option>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.role_name}</option>)}
-                  </select>
-                  {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
-                  <NeonButton type="submit" loading={submitting}>Send Invitation</NeonButton>
-                </form>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
-
-        {/* Create Role Modal */}
-        <AnimatePresence>
-          {isRoleModalOpen && (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRoleModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
-              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-cyber-gray p-8 rounded-3xl neon-border-purple w-full max-w-md">
-                <h3 className="text-2xl font-black text-white uppercase tracking-tighter mb-6">Create Custom Role</h3>
-                <div className="space-y-6">
-                  <NeonInput icon={ShieldCheck} placeholder="Role Name (e.g. Accountant)" required value={newRoleData.role_name} onChange={(e: any) => setNewRoleData({...newRoleData, role_name: e.target.value})} />
-                  <p className="text-xs text-gray-500 uppercase tracking-widest leading-relaxed">
-                    Define a new role for your school staff and configure their permissions.
-                  </p>
-                  <NeonButton onClick={() => setIsRoleModalOpen(false)} variant="purple">Initialize Role</NeonButton>
-                </div>
-              </motion.div>
-            </div>
-          )}
-        </AnimatePresence>
-      </div>
-    );
-  };
-
   const SchoolDashboardOverview = ({ schoolId }: { schoolId: string }) => {
     return (
       <div className="space-y-8">
@@ -7918,150 +7629,8 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
     );
   };
 
-  const StudentManagement = ({ schoolId }: { schoolId: string }) => {
-    const [isAdmissionWizardOpen, setIsAdmissionWizardOpen] = useState(false);
-    const [isIDCardGeneratorOpen, setIsIDCardGeneratorOpen] = useState(false);
-
-    if (isAdmissionWizardOpen) {
-      return (
-        <div className="space-y-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-3xl font-black text-white uppercase tracking-tighter">New Admission</h2>
-              <p className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mt-1">Register a new student to your institution</p>
-            </div>
-            <button 
-              onClick={() => setIsAdmissionWizardOpen(false)}
-              className="p-3 bg-white/5 hover:bg-white/10 rounded-xl border border-white/5 text-gray-400 hover:text-white transition-all"
-            >
-              <X size={20} />
-            </button>
-          </div>
-          <StudentAdmissionWizard 
-            schoolId={schoolId} 
-            onSuccess={() => setIsAdmissionWizardOpen(false)}
-            onCancel={() => setIsAdmissionWizardOpen(false)}
-          />
-        </div>
-      );
-    }
-
-    if (isIDCardGeneratorOpen) {
-      return (
-        <div className="space-y-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-3xl font-black text-white uppercase tracking-tighter">ID Card Generator</h2>
-              <p className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mt-1">Batch generate and print student identification cards</p>
-            </div>
-            <button 
-              onClick={() => setIsIDCardGeneratorOpen(false)}
-              className="p-3 bg-white/5 hover:bg-white/10 rounded-xl border border-white/5 text-gray-400 hover:text-white transition-all"
-            >
-              <X size={20} />
-            </button>
-          </div>
-          <IDCardGenerator schoolId={schoolId} />
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <h2 className="text-3xl font-black text-white uppercase tracking-tighter">Student Management</h2>
-          <button 
-            onClick={() => setIsAdmissionWizardOpen(true)}
-            className="bg-neon-indigo text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:shadow-[0_0_20px_rgba(99,102,241,0.3)] transition-all active:scale-95"
-          >
-            <UserPlus size={16} /> New Admission
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 text-center group hover:neon-border-indigo/20 transition-all cursor-pointer">
-            <div className="w-16 h-16 bg-neon-indigo/10 rounded-2xl flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-              <Users className="text-neon-indigo" size={32} />
-            </div>
-            <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2">Student Directory</h3>
-            <p className="text-gray-500 text-xs font-medium">View and manage all enrolled students.</p>
-          </div>
-          <div 
-            onClick={() => setIsIDCardGeneratorOpen(true)}
-            className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 text-center group hover:neon-border-indigo/20 transition-all cursor-pointer"
-          >
-            <div className="w-16 h-16 bg-neon-indigo/10 rounded-2xl flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-              <IdCard className="text-neon-indigo" size={32} />
-            </div>
-            <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2">ID Cards</h3>
-            <p className="text-gray-500 text-xs font-medium">Generate and print student identification cards.</p>
-          </div>
-          <div className="bg-cyber-gray/40 backdrop-blur-md p-8 rounded-3xl border border-white/5 text-center group hover:neon-border-indigo/20 transition-all cursor-pointer">
-            <div className="w-16 h-16 bg-neon-indigo/10 rounded-2xl flex items-center justify-center mx-auto mb-6 group-hover:scale-110 transition-transform">
-              <TrendingUp className="text-neon-indigo" size={32} />
-            </div>
-            <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2">Promotions</h3>
-            <p className="text-gray-500 text-xs font-medium">Promote students to the next academic session.</p>
-          </div>
-        </div>
-
-        <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-[2.5rem] border border-white/5 text-center">
-          <GraduationCap className="mx-auto text-gray-800 mb-6" size={80} />
-          <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">No Students Found</h3>
-          <p className="text-gray-500 max-w-md mx-auto font-medium mb-8">Start by adding your first student to the system using the "New Admission" button above.</p>
-          <button 
-            onClick={() => setIsAdmissionWizardOpen(true)}
-            className="bg-white/5 hover:bg-white/10 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] border border-white/10 transition-all"
-          >
-            Add First Student
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const HRTeachersManagement = ({ schoolId }: { schoolId: string }) => (
-    <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-3xl border border-white/5 text-center">
-      <Users className="mx-auto text-neon-indigo mb-6" size={64} />
-      <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">HR & Teachers</h3>
-      <p className="text-gray-400 max-w-md mx-auto font-medium">Manage teacher profiles, attendance, and salary disbursements.</p>
-    </div>
-  );
-
-  const AcademicClassesManagement = ({ schoolId }: { schoolId: string }) => (
-    <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-3xl border border-white/5 text-center">
-      <BookOpen className="mx-auto text-neon-indigo mb-6" size={64} />
-      <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">Academic & Classes</h3>
-      <p className="text-gray-400 max-w-md mx-auto font-medium">Configure timetables, syllabus, and class sections.</p>
-    </div>
-  );
-
   const FeeCollectionManagement = ({ schoolId }: { schoolId: string }) => (
     <FeeCollectionModule schoolId={schoolId} />
-  );
-
-  const ExamsResultsManagement = ({ schoolId }: { schoolId: string }) => (
-    <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-3xl border border-white/5 text-center">
-      <FileText className="mx-auto text-neon-indigo mb-6" size={64} />
-      <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">Examinations & Results</h3>
-      <p className="text-gray-400 max-w-md mx-auto font-medium">Schedule exams, enter marks, and generate report cards.</p>
-    </div>
-  );
-
-  const CommunicationModule = ({ schoolId }: { schoolId: string }) => (
-    <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-3xl border border-white/5 text-center">
-      <Megaphone className="mx-auto text-neon-indigo mb-6" size={64} />
-      <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">Communication</h3>
-      <p className="text-gray-400 max-w-md mx-auto font-medium">Send SMS, Emails, and App notifications to parents and staff.</p>
-    </div>
-  );
-
-  const SchoolSettingsModule = ({ schoolId }: { schoolId: string }) => (
-    <div className="bg-cyber-gray/40 backdrop-blur-md p-12 rounded-3xl border border-white/5 text-center">
-      <Settings className="mx-auto text-neon-indigo mb-6" size={64} />
-      <h3 className="text-2xl font-black text-white uppercase tracking-widest mb-4">School Settings</h3>
-      <p className="text-gray-400 max-w-md mx-auto font-medium">Configure school profile, session dates, and portal branding.</p>
-    </div>
   );
 
   const SuperAdminProfile = () => {
@@ -8295,7 +7864,7 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
         return <TeacherPortalDashboard userProfile={userProfile} />;
       }
       if (userProfile.role === 'parent') {
-        return <ParentPortalDashboard parentUid={userProfile.uid} parentName={userProfile.name} />;
+        return <ParentPortalDashboard parentId={userProfile.uid} schoolId={userProfile.schoolId!} />;
       }
       if (userProfile.role === 'super_admin') {
         return <SuperAdminDashboard userProfile={userProfile} setActiveTab={setActiveTab} />;
@@ -8470,7 +8039,7 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
     }
 
     if (activeTab === 'attendance') {
-      return <StudentAttendanceModule schoolId={userProfile.schoolId!} />;
+      return <AttendanceManagement schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'leave_approval' && userProfile.role === 'school_admin') {
@@ -8478,7 +8047,7 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
     }
 
     if (activeTab === 'teachers' && userProfile.role === 'school_admin') {
-      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'academics') {
@@ -8498,7 +8067,7 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
     }
 
     if (activeTab === 'communication') {
-      return <CommunicationModule schoolId={userProfile.schoolId!} />;
+      return <CommunicationHub schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'school_admin_roles' && userProfile.role === 'school_admin') {
@@ -8509,12 +8078,24 @@ const Dashboard = ({ userProfile, settings, school, systemConfig }: { userProfil
       return <SchoolSettingsModule schoolId={userProfile.schoolId!} />;
     }
 
+    if (activeTab === 'integrations') {
+      return <IntegrationHub />;
+    }
+
     if (activeTab === 'hr_payroll') {
-      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
     }
 
     if (activeTab === 'teachers') {
-      return <LocalTeacherHRManagement schoolId={userProfile.schoolId!} />;
+      return <TeacherHRManagement schoolId={userProfile.schoolId!} />;
+    }
+
+    if (activeTab === 'parent_portal' && userProfile.role === 'school_admin') {
+      return <ParentPortalManagement schoolId={userProfile.schoolId!} />;
+    }
+
+    if (activeTab === 'teacher_portal' && userProfile.role === 'school_admin') {
+      return <TeacherPortalManagement schoolId={userProfile.schoolId!} />;
     }
 
     return (

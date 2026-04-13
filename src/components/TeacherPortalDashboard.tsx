@@ -11,7 +11,15 @@ import {
   BookOpen,
   ArrowRight,
   LayoutDashboard,
-  LogOut
+  LogOut,
+  Plus,
+  Star,
+  AlertTriangle,
+  Image as ImageIcon,
+  Paperclip,
+  RefreshCw,
+  AlertCircle,
+  TrendingUp
 } from 'lucide-react';
 import { 
   collection, 
@@ -21,14 +29,20 @@ import {
   onSnapshot,
   Timestamp,
   orderBy,
-  limit
+  limit,
+  addDoc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import TeacherAttendanceModule from './TeacherAttendanceModule';
 import TeacherMarksEntryModule from './TeacherMarksEntryModule';
 import TeacherLeaveModule from './TeacherLeaveModule';
+import TeacherClassDiaryModule from './TeacherClassDiaryModule';
+import TeacherBehaviorModule from './TeacherBehaviorModule';
+import TeacherStudentProgressModule from './TeacherStudentProgressModule';
 
 // --- Types ---
 interface TimetableSlot {
@@ -141,10 +155,101 @@ const QuickActionCard = ({ icon: Icon, label, color, onClick }: { icon: any, lab
 );
 
 const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile }) => {
-  const { schedule, loading } = useTeacherSchedule(userProfile.uid, userProfile.schoolId);
+  const [authReady, setAuthReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchTimeout, setFetchTimeout] = useState(false);
+  const [schedule, setSchedule] = useState<TeacherScheduleItem[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [activeView, setActiveView] = useState<'dashboard' | 'attendance' | 'marks' | 'leave'>('dashboard');
+  const [activeView, setActiveView] = useState<'dashboard' | 'attendance' | 'marks' | 'leave' | 'diary' | 'behavior' | 'progress'>('dashboard');
+  const [retryCount, setRetryCount] = useState(0);
+
+  // Auth State Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setAuthReady(true);
+      } else {
+        setAuthReady(false);
+        setLoading(false);
+        setError("User not authenticated. Please log in again.");
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch Schedule
+  useEffect(() => {
+    if (!authReady || !userProfile.uid || !userProfile.schoolId) return;
+
+    setLoading(true);
+    setError(null);
+    setFetchTimeout(false);
+
+    const timeoutId = setTimeout(() => {
+      if (loading) {
+        setFetchTimeout(true);
+        setLoading(false);
+      }
+    }, 10000);
+
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const today = days[new Date().getDay()];
+    
+    const q = query(collection(db, 'timetables'), where('school_id', '==', userProfile.schoolId));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      clearTimeout(timeoutId);
+      
+      // SECURITY CHECK: Verify role is teacher
+      if (userProfile.role !== 'teacher') {
+        setError("Access Denied: You do not have the required permissions to access the Teacher Portal.");
+        setLoading(false);
+        return;
+      }
+
+      const teacherItems: TeacherScheduleItem[] = [];
+      
+      snapshot.docs.forEach(doc => {
+        const data = doc.data() as Timetable;
+        const daySchedule = data.schedule[today];
+        
+        if (daySchedule) {
+          Object.entries(daySchedule).forEach(([period, slot]) => {
+            if (slot.teacher_id === userProfile.uid) {
+              teacherItems.push({
+                day: today,
+                period,
+                subject: slot.subject,
+                className: data.class,
+                section: data.section,
+                time: period
+              });
+            }
+          });
+        }
+      });
+
+      const sorted = teacherItems.sort((a, b) => a.period.localeCompare(b.period));
+      setSchedule(sorted);
+      setLoading(false);
+    }, (err) => {
+      clearTimeout(timeoutId);
+      console.error("Error fetching schedule:", err);
+      if (err.message.includes('permission-denied')) {
+        setError("Security Access Error: Please contact Super Admin to verify your Role.");
+      } else {
+        setError("Failed to load teacher data. Please try again.");
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timeoutId);
+    };
+  }, [authReady, userProfile.uid, userProfile.schoolId, retryCount]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -152,7 +257,7 @@ const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile })
   }, []);
 
   useEffect(() => {
-    if (!userProfile.schoolId) return;
+    if (!authReady || !userProfile.schoolId) return;
     
     const q = query(
       collection(db, 'announcements'), 
@@ -166,7 +271,7 @@ const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile })
     });
 
     return () => unsubscribe();
-  }, [userProfile.schoolId]);
+  }, [authReady, userProfile.schoolId]);
 
   const upNext = useMemo(() => {
     // Simple logic: first item in schedule that isn't past (mocking time for now)
@@ -185,10 +290,48 @@ const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile })
     minute: '2-digit'
   });
 
+  const SkeletonLoader = () => (
+    <div className="min-h-screen bg-[#0a0a0c] text-white p-4 md:p-8 space-y-8">
+      <div className="max-w-4xl mx-auto space-y-8">
+        <div className="h-16 w-64 bg-cyber-gray/20 rounded-2xl animate-pulse" />
+        <div className="h-48 w-full bg-cyber-gray/20 rounded-[2rem] animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => <div key={i} className="h-32 bg-cyber-gray/20 rounded-3xl animate-pulse" />)}
+        </div>
+        <div className="h-64 w-full bg-cyber-gray/20 rounded-[2rem] animate-pulse" />
+      </div>
+    </div>
+  );
+
   if (loading) {
+    return <SkeletonLoader />;
+  }
+
+  if (error || fetchTimeout) {
     return (
-      <div className="min-h-screen bg-cyber-black flex items-center justify-center">
-        <Clock className="text-neon-blue animate-spin" size={48} />
+      <div className="min-h-screen bg-cyber-black flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-cyber-gray/20 backdrop-blur-xl rounded-[2.5rem] p-8 border border-white/5 shadow-2xl text-center space-y-6">
+          <div className="w-20 h-20 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto border border-red-500/20">
+            <AlertCircle size={40} />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl font-black text-white uppercase tracking-tight">
+              {fetchTimeout ? "Connection Timeout" : "Access Restricted"}
+            </h2>
+            <p className="text-sm font-bold text-gray-500 leading-relaxed">
+              {fetchTimeout 
+                ? "The connection is taking longer than expected. Please check your internet or try again."
+                : error}
+            </p>
+          </div>
+          <button 
+            onClick={() => setRetryCount(prev => prev + 1)}
+            className="w-full py-4 bg-neon-blue text-black rounded-2xl text-xs font-black uppercase tracking-widest hover:scale-105 transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(0,243,255,0.3)]"
+          >
+            <RefreshCw size={16} />
+            Re-Authenticate & Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -205,8 +348,20 @@ const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile })
     return <TeacherLeaveModule userProfile={userProfile} onBack={() => setActiveView('dashboard')} />;
   }
 
+  if (activeView === 'diary') {
+    return <TeacherClassDiaryModule userProfile={userProfile} onBack={() => setActiveView('dashboard')} />;
+  }
+
+  if (activeView === 'behavior') {
+    return <TeacherBehaviorModule userProfile={userProfile} onBack={() => setActiveView('dashboard')} />;
+  }
+
+  if (activeView === 'progress') {
+    return <TeacherStudentProgressModule userProfile={userProfile} onBack={() => setActiveView('dashboard')} />;
+  }
+
   return (
-    <div className="min-h-screen bg-[#0a0a0c] text-white p-4 md:p-8 pb-24 md:pb-8">
+    <div className="min-h-screen bg-[#0a0a0c] text-white p-4 md:p-8 pb-24 md:pb-8 font-['Plus_Jakarta_Sans']">
       <div className="max-w-4xl mx-auto space-y-8">
         
         {/* Header Section */}
@@ -260,25 +415,43 @@ const TeacherPortalDashboard: React.FC<{ userProfile: any }> = ({ userProfile })
         <section className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <QuickActionCard 
             icon={CheckCircle2} 
-            label="Mark Attendance" 
+            label="Attendance" 
             color="neon-blue" 
             onClick={() => setActiveView('attendance')} 
           />
           <QuickActionCard 
             icon={FileText} 
-            label="Enter Marks" 
+            label="Marks" 
             color="neon-purple" 
             onClick={() => setActiveView('marks')} 
           />
           <QuickActionCard 
-            icon={Calendar} 
-            label="My Timetable" 
+            icon={BookOpen} 
+            label="Class Diary" 
             color="neon-pink" 
+            onClick={() => setActiveView('diary')} 
+          />
+          <QuickActionCard 
+            icon={Star} 
+            label="Behavior" 
+            color="yellow-400" 
+            onClick={() => setActiveView('behavior')} 
+          />
+          <QuickActionCard 
+            icon={TrendingUp} 
+            label="Progress" 
+            color="neon-green" 
+            onClick={() => setActiveView('progress')} 
+          />
+          <QuickActionCard 
+            icon={Calendar} 
+            label="Timetable" 
+            color="neon-blue" 
             onClick={() => toast.info("Timetable View Loading...")} 
           />
           <QuickActionCard 
             icon={Coffee} 
-            label="Leave Request" 
+            label="Leave" 
             color="gray-400" 
             onClick={() => setActiveView('leave')} 
           />

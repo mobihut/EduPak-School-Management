@@ -299,7 +299,7 @@ const TeacherMarksEntryModule: React.FC<{ userProfile: any; onBack: () => void }
         </div>
 
         {/* Controls */}
-        <div className="bg-cyber-gray/10 rounded-3xl border border-white/5 p-6 space-y-4">
+        <div className="bg-cyber-gray/10 rounded-3xl border border-white/5 p-6 space-y-4 sticky top-24 z-20 backdrop-blur-xl">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">Select Exam</label>
@@ -354,15 +354,16 @@ const TeacherMarksEntryModule: React.FC<{ userProfile: any; onBack: () => void }
           </div>
 
           <div className="bg-cyber-gray/10 rounded-3xl border border-white/5 overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-cyber-black/40 border-b border-white/5">
-                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500 w-16">Roll</th>
-                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500">Student Name</th>
-                  <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500 w-32 text-right">Marks</th>
-                </tr>
-              </thead>
-              <tbody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[600px]">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-cyber-black/80 backdrop-blur-md border-b border-white/5">
+                    <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500 w-16">Roll</th>
+                    <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500">Student Name</th>
+                    <th className="p-4 text-[10px] font-black uppercase tracking-widest text-gray-500 w-32 text-right">Marks</th>
+                  </tr>
+                </thead>
+                <tbody>
                 {isLoading ? (
                   <tr>
                     <td colSpan={3} className="p-12 text-center">
@@ -395,6 +396,7 @@ const TeacherMarksEntryModule: React.FC<{ userProfile: any; onBack: () => void }
             </table>
           </div>
         </div>
+      </div>
 
         {/* Save Button */}
         <div className="fixed bottom-6 left-4 right-4 md:relative md:bottom-0 md:left-0 md:right-0">
